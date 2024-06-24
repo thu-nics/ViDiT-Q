@@ -1,0 +1,36 @@
+model:
+    model_id: "pixart"
+    model_type: 'pixart'  # ['sd','sdxl']
+conditional: True
+smooth_quant_list: ""
+calib_data:
+    path: "./logs/pixart/calib_data"
+    n_steps: 19
+    batch_size: 4  # used for quant param initialization
+    n_samples: 32
+    iters_w: 20000
+    iters_a: 5000
+quant:
+    weight:
+        quantizer:
+            n_bits: 8
+            per_group: "channel"
+            scale_method: 'min_max'
+            round_mode: 'nearest'
+    activation:
+        quantizer:
+            n_bits: 8
+            per_group: "token"
+            scale_method: 'min_max'
+            dynamic: True
+            round_mode: 'nearest_ste'
+            running_stat: False
+            smooth_quant: # les: it is only for convenience to put smooth quant configs under act quantizer
+                enable: True
+                channel_wise_scale_type: momentum_act_max
+                momentum: 0.95
+                alpha: 0.3
+
+    grad_checkpoint: False
+resume_with_w_quantized:
+    path: None

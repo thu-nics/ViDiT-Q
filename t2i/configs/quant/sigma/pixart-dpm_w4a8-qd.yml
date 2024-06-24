@@ -1,0 +1,71 @@
+model:
+    model_id: "pixart"
+    model_type: 'pixart'  # ['sd','sdxl']
+conditional: True
+# timestep_wise: True
+# mixed_precision: [2,4,8]
+smooth_quant_list: ""
+calib_data:
+    path: "quant_models/calib_data/"
+    n_steps: 20
+    batch_size: 1  # used for quant param initialization
+    n_samples: 32
+    iters_w: 20000
+    iters_a: 5000
+quant:
+    weight:
+        optimization:
+            # assume that weight/act quantize param opt together
+            joint_weight_act_opt: False
+            use_grad: False
+            iters: 1000
+            loss:
+                lambda_coeff: 0.5
+                warmup: 0.0
+            params:
+                # delta: 
+                #     lr: 1.e-4
+                alpha: 
+                    lr: 1.e-2
+        quantizer:
+            n_bits: 4
+            per_group: "channel"
+            scale_method: 'min_max'
+            # round_mode: 'learned_hard_sigmoid'
+            round_mode: 'nearest'
+            timestep_wise: False
+    activation:
+        optimization:
+            # joint_weight_act_opt: False
+            use_grad: False
+            iters: 500
+            loss:
+                lambda_coeff: 1.0
+                warmup: 0.0
+            params:
+                delta:
+                    lr: 1.e-4
+                #  alpha: 
+                #      lr: 1.e-2
+        quantizer:
+            n_bits: 8
+            per_group: False
+            scale_method: 'min_max'
+            dynamic: False
+            round_mode: 'nearest_ste'
+            running_stat: True
+            timestep_wise: False
+            smooth_quant: # les: it is only for convenience to put smooth quant configs under act quantizer
+                enable: Fales
+                channel_wise_scale_type: momentum_act_max
+                momentum: 0.95
+                alpha: 0.3
+            # softmax: 
+                # n_bits: 16
+                # channel_wise: False
+                # scale_method: 'min_max'
+                # round_mode: 'nearest'
+                # always_zero: True
+    grad_checkpoint: False
+resume_with_w_quantized:
+    path: None
