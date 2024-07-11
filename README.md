@@ -174,7 +174,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python t2v/scripts/ptq.py $CFG --outdir $OUTDIR \
 ```shell
 CFG="./t2v/configs/quant/W8A8/16x512x512.py" # the opensora config
 CKPT_PATH="./logs/split_ckpt/OpenSora-v1-HQ-16x512x512-split.pth"  # your path of splited ckpt
-OUTDIR="./logs/appendix/w8a8_ptq"  # your path of the w8a8 ptq result
+OUTDIR="./logs/w8a8_ptq"  # your path of the w8a8 ptq result
 GPU_ID=$1
 SAVE_DIR="w8a8_samples"  # your path to save generated videos
 
@@ -198,7 +198,7 @@ MP_W_CONFIG="./t2v/configs/quant/W4A8_Naive_Smooth/t20_weight_4_mp.yaml"  # the 
 MP_A_CONFIG="./t2v/configs/quant/W4A8_Naive_Smooth/t20_act_8_mp.yaml" # the mixed precision config of act
 SAVE_DIR="W4A8_Naive_Smooth_samples"
 # quant infer
-CUDA_VISIBLE_DEVICES=$GPU_ID python t2v/scripts/quant_txt2video_mp.py $OUTDIR/opensora_config.py --outdir $OUTDIR --ckpt_path $CKPT_PATH  --dataset_type opensora \
+CUDA_VISIBLE_DEVICES=$GPU_ID python t2v/scripts/quant_txt2video_mp.py $CFG --outdir $OUTDIR --ckpt_path $CKPT_PATH  --dataset_type opensora \
 	--part_fp\
 	--timestep_wise_mp \
 	--time_mp_config_weight $MP_W_CONFIG \

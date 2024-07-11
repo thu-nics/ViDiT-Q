@@ -36,17 +36,6 @@ setup(
             # "t2v.*",
             "qdiff",
         ),
-        # exclude=(
-        #     "t2v.assets",
-        #     "t2v.configs",
-        #     "t2v.docs",
-        #     "t2v.outputs",
-        #     "t2v.pretrained_models",
-        #     "t2v.scripts",
-        #     "t2v.tests",
-        #     "t2v.tools",
-        #     "t2v.*.egg-info",
-        # )
     ),
     description="Democratizing Efficient Video Production for All",
     # long_description=fetch_readme(),
