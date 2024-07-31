@@ -137,7 +137,7 @@ def forward_with_cfg(model, x, timestep, y, cfg_scale, return_trajectory=False, 
 
     # INFO: split the model forward along the batch
     # to enable different quant params for cond & uncond branch
-    CFG_SPLIT = False  # only valid for dynamic quant params
+    CFG_SPLIT = model.cfg_split # DIRTY: read the cfgg_split cfg from model
     if CFG_SPLIT:
         # DEBUG_ONLY
         half = x[: len(x) // 2] # actually use the 1st half of x

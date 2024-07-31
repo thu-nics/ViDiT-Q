@@ -72,7 +72,7 @@ def main():
     
     dtype = to_torch_dtype(cfg.dtype)
     set_random_seed(seed=cfg.seed)
-    
+
     # ======================================================
     # 3. build model & load weights
     # ======================================================
@@ -144,6 +144,11 @@ def main():
     qnn.cuda()
     qnn.eval()
     logger.info(qnn)
+
+    # DIRTY: set the cfg_split as the attribute of the model
+    # the cfg_split is configured in `opensora/schedulers/ippdm/__init__.py`
+    cfg_split = config.get('cfg_split', False)
+    qnn.cfg_split = cfg_split
 
     if not config.quant.grad_checkpoint:
         logger.info('Not use gradient checkpointing for transformer blocks')

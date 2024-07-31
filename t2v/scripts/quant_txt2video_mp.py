@@ -308,6 +308,12 @@ def main():
     qnn.eval()
     logger.info(qnn)
 
+    # DIRTY: set the cfg_split as the attribute of the model
+    # the cfg_split is configured in `opensora/schedulers/ippdm/__init__.py`
+    cfg_split = config.get('cfg_split', False)
+    qnn.cfg_split = cfg_split
+
+
     qnn.set_quant_state(False, False)
     # for smooth quant
     # if aq_params.smooth_quant.enable:

@@ -494,7 +494,7 @@ class QuantModel(nn.Module):
                             if  module_name in module.module_name:
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: weight_bit={n_bit}")
+                                # logger.info(f"{full_name}: weight_bit={n_bit}")
                     else:
                         self.set_layer_weight_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='per_layer', bit_type=bit_type, prefix=full_name+".")
                 elif bit_type == 'act':
@@ -503,7 +503,7 @@ class QuantModel(nn.Module):
                             if  module_name in module.module_name:
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: act_bit={n_bit}")
+                                # logger.info(f"{full_name}: act_bit={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='per_layer', bit_type=bit_type, prefix=full_name+".")
 
@@ -536,14 +536,14 @@ class QuantModel(nn.Module):
                     if isinstance(module, WeightQuantizer):
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: weight_quant={n_bit}")
+                                # logger.info(f"{full_name}: weight_quant={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='reset', bit_type=bit_type, prefix=full_name+".")
                 if bit_type == 'act':
                     if isinstance(module, ActQuantizer):
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: act_quant={n_bit}")
+                                # logger.info(f"{full_name}: act_quant={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='reset', bit_type=bit_type, prefix=full_name+".")
 
