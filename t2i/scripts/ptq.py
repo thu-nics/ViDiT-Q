@@ -35,6 +35,7 @@ from diffusion.data.datasets.utils import *
 from qdiff.models.quant_model import QuantModel
 from qdiff.quantizer.base_quantizer import BaseQuantizer, WeightQuantizer, ActQuantizer
 from qdiff.utils import get_quant_calib_data
+from qdiff.optimization.model_recon import model_reconstruction
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -57,11 +58,12 @@ def get_args():
     parser.add_argument('--save_name', default='test_sample', type=str)
     parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--ptq_config', default='./t2i/configs/quant/', type=str)
-    parser.add_argument('--bitwidth_setting', default='', type=str)
+    parser.add_argument('--exp_name', default='', type=str)
     parser.add_argument('--save_path', required=True, type=str)
     parser.add_argument('--calib_data_path', required=True, type=str, default=None)
     parser.add_argument('--base', default=False, type=bool)
-    parser.add_argument('--smoothq', default=False, type=bool, help="if to perform smooth quant")
+    parser.add_argument('--precomputed_text_embeds', default=None, type=str)
+    # parser.add_argument('--smoothq', default=False, type=bool, help="if to perform smooth quant")
 
     return parser.parse_args()
 
@@ -71,7 +73,6 @@ def set_env(seed=0):
     for _ in range(30):
         torch.randn(1, 4, args.image_size, args.image_size)
 
-@torch.inference_mode()
 def visualize(items, bs, sample_steps, cfg_scale):
 
     for chunk in tqdm(list(get_chunks(items, bs))[0], unit='batch'):
@@ -100,12 +101,25 @@ def visualize(items, bs, sample_steps, cfg_scale):
             emb_masks = caption_token.attention_mask
             null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
         elif args.version == 'alpha':
-            caption_embs, emb_masks = t5.get_text_embeddings(prompts)
-            caption_embs = caption_embs.float()[:,None]
-            null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                assert args.txt_file == './t2i/asset/samples.txt'
+                save_d = torch.load('./t2i/asset/text_embeds_pixart_alpha.pth')
+                caption_embs = save_d['caption_embs']
+                emb_masks = save_d['emb_masks']
+                null_y = save_d['null_y']
+            else:
+                caption_embs, emb_masks = t5.get_text_embeddings(prompts)
+                caption_embs = caption_embs.float()[:,None]
+                null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
+
+                # INFO: save the text_embeds
+                # save_d = {}
+                # save_d['caption_embs'] = caption_embs
+                # save_d['emb_masks'] = emb_masks
+                # save_d['null_y'] = null_y
+                # torch.save(save_d, './t2i/asset/text_embeds_pixart_alpha.pth')
 
         print(f'finish embedding')
-
         with torch.no_grad():
 
             if args.sampling_algo == 'dpm-solver':
@@ -135,7 +149,7 @@ def visualize(items, bs, sample_steps, cfg_scale):
             else:
                 raise NotImplementedError
             
-        # ptq_config_file = os.path.join(args.ptq_config_path, f"{args.version}/pixart-dpm_{args.bitwidth_setting}.yml")
+        # ptq_config_file = os.path.join(args.ptq_config_path, f"{args.version}/pixart-dpm_{args.exp_name}.yml")
         ptq_config_file = args.ptq_config
         logger = logging.getLogger(__name__)
         config = OmegaConf.load(ptq_config_file)
@@ -227,6 +241,7 @@ def visualize(items, bs, sample_steps, cfg_scale):
         # by default, use the running_mean of calibration data to determine activation quant params
         qnn.set_quant_state(True, True) # quantize activation with fixed quantized weight
         fp_layer_list = ['x_embedder', 't_embedder', 't_block', 'y_embedder', 'csize_embedder', 'ar_embedder']
+        qnn.fp_layer_list = fp_layer_list
         qnn.set_layer_quant(model=qnn, module_name_list=fp_layer_list, quant_level='per_layer', weight_quant=False, act_quant=False, prefix="")
     
         logger.info('Running stat for activation quantization')
@@ -288,11 +303,88 @@ def visualize(items, bs, sample_steps, cfg_scale):
         logger.info("activation initialization done!")
         torch.cuda.empty_cache()
 
+
+        # ----------------------- get the quant params (training opt), using the calibration data -------------------------------------
+        weight_optimization = False
+        if config.quant.weight.optimization is not None:
+            if config.quant.weight.optimization.params is not None:
+                weight_optimization = True
+        act_optimization = False
+        if config.quant.activation.optimization is not None:
+            if config.quant.activation.optimization.params is not None:
+                act_optimization = True
+        use_optimization = any([weight_optimization, act_optimization])
+
+        if not use_optimization:  # no need for optimization-based quantization
+            pass
+        else:
+            # INFO: get the quant parameters
+            qnn.train()  # setup the train_mode
+            opt_d = {}
+            if weight_optimization:
+                opt_d['weight'] = getattr(config.quant,'weight').optimization.params.keys()
+            else:
+                opt_d['weight'] = None
+            if act_optimization:
+                opt_d['activation'] = getattr(config.quant,'activation').optimization.params.keys()
+            else:
+                opt_d['activation'] = None
+            qnn.replace_quant_buffer_with_parameter(opt_d)
+
+            if config.quant.weight.optimization.joint_weight_act_opt:  # INFO: optimize all quant params together
+                assert weight_optimization and act_optimization
+                qnn.set_quant_state(True, True)
+                opt_target = 'weight_and_activation'
+                param_types = {
+                        'weight': list(config.quant.weight.optimization.params.keys()),
+                        'activation': list(config.quant.activation.optimization.params.keys())
+                        }
+                if 'alpha' in param_types['weight']:
+                    assert config.quant.weight.quantizer.round_mode == 'learned_hard_sigmoid'  # check adaround stat
+                if 'alpha' in param_types['activation']:
+                    assert config.quant.activation.quantizer.round_mode == 'learned_hard_sigmoid'  # check adaround stat
+                model_reconstruction(qnn,qnn,calib_data,config,param_types,opt_target)
+                logger.info("Finished optimizing param {} for layer's {}, saving temporary checkpoint...".format(param_types,opt_target))
+                torch.save(qnn.get_quant_params_dict(), os.path.join(save_root, "ckpt.pth"))
+
+            else:  # INFO: sequantially quantize weight and activation quant params
+
+                # --- the weight quantization (with optimization) -----
+                if not weight_optimization:
+                    logger.info("No quant parmas, skip optimizing weight quant parameters")
+                else:
+                    qnn.set_quant_state(True, False)  # use FP activation
+                    opt_target = 'weight'
+                    # --- unpack the config ----
+                    param_types = list(config.quant.weight.optimization.params.keys())
+                    if 'alpha' in param_types:
+                        assert config.quant.weight.quantizer.round_mode == 'learned_hard_sigmoid'  # check adaround stat
+                    # INFO: recursive iter through all quantizers, for weight/act quantizer, optimize the delta & alpha (if any) together
+                    model_reconstruction(qnn,qnn,calib_data,config,param_types,opt_target)  # DEBUG_ONLY
+                    logger.info("Finished optimizing param {} for layer's {}, saving temporary checkpoint...".format(param_types, opt_target))
+                    torch.save(qnn.get_quant_params_dict(), os.path.join(save_root, "ckpt.pth"))
+
+                # --- the activation quantization (with optimization) -----
+                if not act_optimization:
+                    logger.info("No quant parmas, skip optimizing activation quant parameters")
+                else:
+                    qnn.set_quant_state(True, True)  # use FP activation
+                    opt_target = 'activation'
+                    # --- unpack the config ----
+                    param_types = list(config.quant.activation.optimization.params.keys())
+                    if 'alpha' in param_types:
+                        assert config.quant.weight.quantizer.round_mode == 'learned_hard_sigmoid'  # check adaround stat
+                    # INFO: recursive iter through all quantizers, for weight/act quantizer, optimize the delta & alpha (if any) together
+                    model_reconstruction(qnn,qnn,calib_data,config,param_types,opt_target)  # DEBUG_ONLY
+                    logger.info("Finished optimizing param {} for layer's {}, saving temporary checkpoint...".format(param_types, opt_target))
+                    torch.save(qnn.get_quant_params_dict(), os.path.join(save_root, "ckpt.pth"))
+
+            qnn.replace_quant_parameter_with_buffers(opt_d)  # replace back to buffer for saving
+
         # save the quant params
         logger.info("Saving calibrated quantized PixArt model")
         quant_params_dict = qnn.get_quant_params_dict()
         torch.save(quant_params_dict, os.path.join(save_root, "ckpt.pth"))
-        
 
 
 if __name__ == '__main__':
@@ -300,7 +392,7 @@ if __name__ == '__main__':
     # Setup PyTorch:
     seed = args.seed
     set_env(seed)
-    torch.cuda.set_device(args.gpu)
+    # torch.cuda.set_device(args.gpu)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     assert args.sampling_algo in ['iddpm', 'dpm-solver', 'sa-solver']
 
@@ -311,7 +403,7 @@ if __name__ == '__main__':
     micro_condition = True if args.version == 'alpha' and args.image_size == 1024 else False
     sample_steps_dict = {'iddpm': 100, 'dpm-solver': 20, 'sa-solver': 25}
     sample_steps = args.step if args.step != -1 else sample_steps_dict[args.sampling_algo]
-    weight_dtype = torch.float16
+    weight_dtype = torch.float32  # when needing optimization. use FP32 for calib
     print(f"Inference with {weight_dtype}")
 
     # model setting
@@ -355,7 +447,10 @@ if __name__ == '__main__':
         null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
     elif args.version == 'alpha':
         vae = AutoencoderKL.from_pretrained(os.path.join(args.pipeline_load_from, "sd-vae-ft-ema")).to(device).to(weight_dtype)
-        t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:   
+            t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
 
 
     work_dir = "."
@@ -372,9 +467,9 @@ if __name__ == '__main__':
         epoch_name = 'unknown'
         step_name = 'unknown'
 
-    smooth = "_s" if args.smoothq else ""
+    # smooth = "_s" if args.smoothq else ""
     # save_root = f"./quant_models/{args.version}/{args.ptq_config}{smooth}"
-    save_root = os.path.join(args.save_path,f"{args.version}/{args.bitwidth_setting}{smooth}")
+    save_root = os.path.join(args.save_path,f"{args.version}/{args.exp_name}")
     os.makedirs(save_root, exist_ok=True)
 
     outpath = save_root
@@ -385,7 +480,7 @@ if __name__ == '__main__':
     # INFO: add backup file and backup cfg into logpath for debug
     if os.path.exists(os.path.join(outpath,'config.yaml')):
         os.remove(os.path.join(outpath,'config.yaml'))
-    # ptq_config_file = os.path.join(args.ptq_config_path, f"{args.version}/pixart-dpm_{args.bitwidth_setting}.yml")
+    # ptq_config_file = os.path.join(args.ptq_config_path, f"{args.version}/pixart-dpm_{args.exp_name}.yml")
     ptq_config_file = args.ptq_config
     shutil.copy(ptq_config_file, os.path.join(outpath,'config.yaml'))
     if os.path.exists(os.path.join(outpath,'qdiff')): # if exist, overwrite

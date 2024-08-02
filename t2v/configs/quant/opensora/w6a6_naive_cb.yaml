@@ -3,7 +3,7 @@ model:
     model_id: "opensora"
     model_type: 'opensora'  # ['sd','sdxl']
 conditional: True
-cfg_split: True
+cfg_split: False
 mixed_precision: [4,6,8]
 calib_data:
     path: "/mnt/public/liuenshu/temp_files/video_quant/calib_data.pt"
@@ -33,8 +33,8 @@ quant:
             n_temporal_token: 16
             n_prompt: 120
             smooth_quant: 
-                enable: True
-               gchannel_wise_scale_type: momentum_act_max
+                enable: False
+                channel_wise_scale_type: momentum_act_max
                 momentum: 0.95
                 alpha: 0.6250
     grad_checkpoint: False

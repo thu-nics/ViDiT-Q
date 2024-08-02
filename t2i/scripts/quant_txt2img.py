@@ -60,7 +60,6 @@ def get_args():
     parser.add_argument('--quant_weight', action='store_true', help="if to quantize the weight")
     parser.add_argument('--quant_act', action='store_true', help="if to quantize the act")
     parser.add_argument('--quant_path', default='./quant_models', type=str)
-    parser.add_argument('--bitwidth_setting', default='', type=str)
     parser.add_argument('--caption_emb_path', default='./t2i/asset/samples2.pt', type=str)
 
     return parser.parse_args()
@@ -229,12 +228,13 @@ if __name__ == '__main__':
     if not os.path.exists(quant_path):
         print(f"Error: {quant_path} does not exist")
         sys.exit(1)
-    if not use_quant_act:
-        bitwidth_setting = args.bitwidth_setting[:2] + "a16"
-    elif not use_quant_weight:
-        bitwidth_setting = "w16" + args.bitwidth_setting[-2:]
-    else: 
-        bitwidth_setting = args.bitwidth_setting
+
+    # if not use_quant_act:
+        # exp_name = args.exp_name[:2] + "a16"
+    # elif not use_quant_weight:
+        # exp_name = "w16" + args.exp_name[-2:]
+    # else: 
+        # exp_name = args.exp_name
 
     logger = logging.getLogger(__name__)
     ptq_config_file = os.path.join(quant_path, f"config.yaml")
@@ -285,7 +285,7 @@ if __name__ == '__main__':
         qnn.cuda()
         qnn.to(weight_dtype)
 
-    save_root = os.path.join(args.save_path, f"{args.version}/{bitwidth_setting}/generated_imgs")
+    save_root = os.path.join(f"{args.quant_path}/generated_imgs")
     # save_root = args.save_path
     os.makedirs(save_root, exist_ok=True)
 

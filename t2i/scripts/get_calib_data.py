@@ -127,7 +127,7 @@ def visualize(items, bs, sample_steps, cfg_scale, args):
                         calib_data[key] = cur_calib_data[key]
                     else:
                         calib_data[key] = torch.cat([cur_calib_data[key], calib_data[key]], dim=1)    
-                    print(key, calib_data[key].shape)
+                    # print(key, calib_data[key].shape)
             else:
                 raise NotImplementedError
 

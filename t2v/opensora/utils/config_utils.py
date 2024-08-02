@@ -85,7 +85,7 @@ def parse_args(training=False, mode=None):
         parser.add_argument(
             "--num_videos",
             type=int,
-            default=100,
+            default=1000,
             help="number of generated videos",
         )
         parser.add_argument(

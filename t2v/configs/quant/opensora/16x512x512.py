@@ -13,19 +13,19 @@ model = dict(
 )
 vae = dict(
     type="VideoAutoencoderKL",
-    from_pretrained="stabilityai/sd-vae-ft-ema",
+    from_pretrained="/share/liuenshu/temp_files/checkpoints/huggingface/sd-vae-ft-ema",
     micro_batch_size=128,
 )
 text_encoder = dict(
     type="t5",
-    # from_pretrained="./pretrained_models/t5_ckpts",
-    from_pretrained="DeepFloyd/t5-v1_1-xxl",
+    from_pretrained="/share/public/fangtongcheng/nips24_code/quant_dit_qdiffusion/diffuser-dev/pretrained_models/t5_ckpts",
+    save_pretrained="/share/liuenshu/temp_files/checkpoints/text_encoder/pretrained_t5",
     model_max_length=120,
 )
 scheduler = dict(
     type="iddpm",
-    num_sampling_steps=20,
-    cfg_scale=7.0,
+    num_sampling_steps=100,
+    cfg_scale=4.0,
 )
 dtype = "fp16"
 

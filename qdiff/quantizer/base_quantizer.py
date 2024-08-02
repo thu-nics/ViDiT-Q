@@ -121,11 +121,8 @@ class BaseQuantizer(nn.Module):
             else:
                 self.init_quant_params(x, self.per_group, momentum=self.running_stat)
 
-        # always indexing from the delta_list and zp_list
-        if self.timestep_wise:
-            self.delta = self.delta_list[self.bit_idx, self.cur_timestep_id]
-            self.zero_point = self.zero_point_list[self.bit_idx, self.cur_timestep_id]
-        else:
+            # INFO: the mixed precision, online choosing self.alpha
+            # does not fit with the q-diffusion optimization (replacing a nn.Parameter)
             self.delta = self.delta_list[self.bit_idx, 0]
             self.zero_point = self.zero_point_list[self.bit_idx, 0]
 
@@ -134,10 +131,7 @@ class BaseQuantizer(nn.Module):
         self.n_levels = 2 ** self.n_bits if not self.sym else 2 ** (self.n_bits - 1) - 1
         # start quantization
         # print(f"x shape {x.shape} delta shape {self.delta.shape} zero shape {self.zero_point.shape}")
-        try:
-            x_int = round_ste(x / self.delta) + self.zero_point
-        except:
-            import ipdb; ipdb.set_trace()
+        x_int = round_ste(x / self.delta) + self.zero_point
 
         x_quant = torch.clamp(x_int, 0, self.n_levels - 1)
         if self.sym:
@@ -145,7 +139,7 @@ class BaseQuantizer(nn.Module):
         else:
             x_quant = torch.clamp(x_int, 0, self.n_levels - 1)
         # import ipdb; ipdb.set_trace()
-        x_quant_ = self.rounding(x)
+        # x_quant_ = self.rounding(x)
         x_dequant = (x_quant - self.zero_point) * self.delta
         return x_dequant
 

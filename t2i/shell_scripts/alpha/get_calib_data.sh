@@ -4,10 +4,11 @@ model_path="./logs/pixart/pixart_alpha/PixArt-XL-2-1024-MS.pth"  # path to PixAr
 bitwidth_setting="w8a8"  # quantization bit width [w8a8, w4a8]
 save_path="./logs/pixart/calib_data"  # the path to save calibration dataset
 GPU_ID=$1
+
 # Step 1: Obtaining the Calibration Dataset:
 python ./t2i/scripts/get_calib_data.py \
-        --version $version \
-        --pipeline_load_from $sd_vae_t5 \
-        --model_path $model_path \
-        --save_path $save_path \
-        --gpu $GPU_ID
+	--version $version \
+	--pipeline_load_from $sd_vae_t5 \
+	--model_path $model_path \
+	--save_path $save_path \
+	--gpu $GPU_ID
