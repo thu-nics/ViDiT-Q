@@ -22,6 +22,8 @@ from diffusion.model.nets import PixArtMS_XL_2, PixArt_XL_2
 from diffusion.data.datasets import get_chunks
 from diffusion.data.datasets.utils import *
 
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--image_size', default=1024, type=int)
@@ -41,11 +43,17 @@ def get_args():
     parser.add_argument('--dataset', default='custom', type=str)
     parser.add_argument('--step', default=-1, type=int)
     parser.add_argument('--save_name', default='test_sample', type=str)
-    parser.add_argument('--save_path', required=True, type=str)
-    parser.add_argument('--gpu', default=0, type=int)
+    parser.add_argument('--save_path', required=False, type=str)
+    parser.add_argument('--save_text_embeds_only', action='store_true', help='save the text embeds instead of the calib data')
+    parser.add_argument('--precomputed_text_embeds', default=None, type=str)
+    # parser.add_argument('--gpu', default=0, type=int)
 
     return parser.parse_args()
 
+def get_idx_from_prompt_list(subset_list, larger_list):
+    index_dict = {value: index for index, value in enumerate(larger_list)}
+    indexes = [index_dict.get(item, -1) for item in subset_list]
+    return indexes
 
 def set_env(seed=0):
     torch.manual_seed(seed)
@@ -57,6 +65,16 @@ def set_env(seed=0):
 def visualize(items, bs, sample_steps, cfg_scale, args):
     save_path = args.save_path
     os.makedirs(save_path, exist_ok=True)
+
+    # optionally save the text embeds
+    if args.save_text_embeds_only is not None:
+        save_d = {}
+        save_d['prompts'] = items
+        for name_ in ['caption_embs','emb_masks','null_y']:
+            save_d[name_] = []
+
+    if args.precomputed_text_embeds is not None:
+        save_d = torch.load(args.precomputed_text_embeds)
 
     calib_data = {}
     for chunk in tqdm(list(get_chunks(items, bs)), unit='batch'):
@@ -79,71 +97,111 @@ def visualize(items, bs, sample_steps, cfg_scale, args):
             latent_size_h, latent_size_w = latent_size, latent_size
 
         if args.version == 'sigma':
-            caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
-                                    return_tensors="pt").to(device)
-            caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
-            caption_embs = caption_embs[:, None]
-            emb_masks = caption_token.attention_mask
-            null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
+            else:
+                caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
+                                        return_tensors="pt").to(device)
+                caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
+                caption_embs = caption_embs[:, None]
+                emb_masks = caption_token.attention_mask
+                null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
+
+                if args.save_text_embeds_only:
+                    # INFO: optional save the text_embeds
+                    save_d['caption_embs'].append(caption_embs)  # [bs, text_embed_size]
+                    save_d['emb_masks'].append(emb_masks)
+                    save_d['null_y'].append(null_y)
+
         elif args.version == 'alpha':
-            caption_embs, emb_masks = t5.get_text_embeddings(prompts)
-            caption_embs = caption_embs.float()[:,None]
-            null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
+            else:
+                caption_embs, emb_masks = t5.get_text_embeddings(prompts)
+                caption_embs = caption_embs.float()[:,None]
+                null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
+
+                if args.save_text_embeds_only:
+                    # INFO: optional save the text_embeds
+                    save_d['caption_embs'].append(caption_embs)  # [bs, text_embed_size]
+                    save_d['emb_masks'].append(emb_masks)
+                    save_d['null_y'].append(null_y)
+
         print(f'finish embedding')
 
-        with torch.no_grad():
-            if args.sampling_algo == 'dpm-solver':
-                # Create sampling noise:
-                n = len(prompts)
-                z = torch.randn(n, 4, latent_size_h, latent_size_w, device=device)
-                model_kwargs = dict(data_info={'img_hw': hw, 'aspect_ratio': ar}, mask=emb_masks)
-                if args.version == "alpha":
-                    dpm_solver = DPMS_alpha(model.forward_with_dpmsolver,
-                                    condition=caption_embs,
-                                    uncondition=null_y,
-                                    cfg_scale=cfg_scale,
-                                    model_kwargs=model_kwargs)
-                elif args.version == "sigma":
-                    dpm_solver = DPMS_sigma(model.forward_with_dpmsolver,
-                                    condition=caption_embs,
-                                    uncondition=null_y,
-                                    cfg_scale=cfg_scale,
-                                    model_kwargs=model_kwargs)
-                samples, _, cur_calib_data = dpm_solver.sample(
-                    z,
-                    steps=sample_steps,
-                    order=2,
-                    skip_type="time_uniform",
-                    method="multistep",
-                    return_intermediate=True,
-                )
-                cur_calib_data["ts"] = torch.tensor(cur_calib_data["ts"][:-1]).reshape((sample_steps,1))
-                cur_calib_data["xs"] = torch.cat(cur_calib_data["xs"][:-1], 0)
-                cur_calib_data["xs"] = cur_calib_data["xs"].reshape((sample_steps, 1, 4, latent_size_h, latent_size_w))
-                cur_calib_data["cond_emb"] = caption_embs.repeat(sample_steps, 1, 1, 1).reshape((sample_steps, 1, 1, max_sequence_length, 4096))
-                cur_calib_data["mask"] = emb_masks.repeat(sample_steps, 1).reshape((sample_steps, 1, max_sequence_length))
-                for key in cur_calib_data:
-                    if not key in calib_data.keys():
-                        calib_data[key] = cur_calib_data[key]
-                    else:
-                        calib_data[key] = torch.cat([cur_calib_data[key], calib_data[key]], dim=1)    
-                    # print(key, calib_data[key].shape)
-            else:
-                raise NotImplementedError
+        if args.save_text_embeds_only:  # skip the solver
+            pass
+        else:
+            with torch.no_grad():
+                if args.sampling_algo == 'dpm-solver':
+                    # Create sampling noise:
+                    n = len(prompts)
+                    z = torch.randn(n, 4, latent_size_h, latent_size_w, device=device)
+                    model_kwargs = dict(data_info={'img_hw': hw, 'aspect_ratio': ar}, mask=emb_masks)
+                    if args.version == "alpha":
+                        dpm_solver = DPMS_alpha(model.forward_with_dpmsolver,
+                                        condition=caption_embs,
+                                        uncondition=null_y,
+                                        cfg_scale=cfg_scale,
+                                        model_kwargs=model_kwargs)
+                    elif args.version == "sigma":
+                        dpm_solver = DPMS_sigma(model.forward_with_dpmsolver,
+                                        condition=caption_embs,
+                                        uncondition=null_y,
+                                        cfg_scale=cfg_scale,
+                                        model_kwargs=model_kwargs)
+                    samples, _, cur_calib_data = dpm_solver.sample(
+                        z,
+                        steps=sample_steps,
+                        order=2,
+                        skip_type="time_uniform",
+                        method="multistep",
+                        return_intermediate=True,
+                    )
+                    cur_calib_data["ts"] = torch.tensor(cur_calib_data["ts"][:-1]).reshape((sample_steps,1))
+                    cur_calib_data["xs"] = torch.cat(cur_calib_data["xs"][:-1], 0)
+                    cur_calib_data["xs"] = cur_calib_data["xs"].reshape((sample_steps, bs, 4, latent_size_h, latent_size_w))
+                    cur_calib_data["cond_emb"] = caption_embs.repeat(sample_steps, 1, 1, 1).reshape((sample_steps, bs, 1, max_sequence_length, 4096))
+                    cur_calib_data["mask"] = emb_masks.repeat(sample_steps, 1).reshape((sample_steps, bs, max_sequence_length))
+                    for key in cur_calib_data:
+                        if not key in calib_data.keys():
+                            calib_data[key] = cur_calib_data[key]
+                        else:
+                            calib_data[key] = torch.cat([cur_calib_data[key], calib_data[key]], dim=1)    
+                        # print(key, calib_data[key].shape)
+                else:
+                    raise NotImplementedError
 
-        samples = samples.to(weight_dtype)
-        samples = vae.decode(samples / vae.config.scaling_factor).sample
-        torch.cuda.empty_cache()
-        # Save images:
-        os.umask(0o000)  # file permission: 666; dir permission: 777
-        # for i, sample in enumerate(samples):
-        #     save_path = os.path.join(save_root, f"{prompts[i][:100]}.jpg")
-        #     print("Saving path: ", save_path)
-        #     try:
-        #         save_image(sample, save_path, nrow=1, normalize=True, value_range=(-1, 1))
-        #     except:
-        #         continue
-    torch.save(calib_data, os.path.join(save_path, f"{args.version}_calib_data_{args.sampling_algo}.pt"))
+            samples = samples.to(weight_dtype)
+            samples = vae.decode(samples / vae.config.scaling_factor).sample
+            torch.cuda.empty_cache()
+            # Save images:
+            os.umask(0o000)  # file permission: 666; dir permission: 777
+
+            # for i, sample in enumerate(samples):
+            #     save_path = os.path.join(save_root, f"{prompts[i][:100]}.jpg")
+            #     print("Saving path: ", save_path)
+            #     try:
+            #         save_image(sample, save_path, nrow=1, normalize=True, value_range=(-1, 1))
+            #     except:
+            #         continue
+
+    # INFO: optional save text embeds
+    if args.save_text_embeds_only:
+        for name_ in ['caption_embs','emb_masks','null_y']:
+            save_d[name_] = torch.cat(save_d[name_], dim=0)
+        torch.save(save_d, os.path.join('./t2i/asset', f"text_embeds_{args.version}_{args.txt_file.split('/')[-1].strip('.txt')}.pth"))
+
+    # when saving the text embeds, skip storing the large calib data
+    # since the text embeds are not necessarily used for calibration, could be used for quant_infer also.
+    if not args.save_text_embeds_only:
+        torch.save(calib_data, os.path.join(save_path, f"{args.version}_calib_data_{args.sampling_algo}.pt"))
 
 
 if __name__ == '__main__':
@@ -151,7 +209,7 @@ if __name__ == '__main__':
     # Setup PyTorch:
     seed = args.seed
     set_env(seed)
-    torch.cuda.set_device(args.gpu)
+    # torch.cuda.set_device(args.gpu)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     assert args.sampling_algo in ['iddpm', 'dpm-solver', 'sa-solver']
 
@@ -200,13 +258,19 @@ if __name__ == '__main__':
             # pixart-Sigma vae link: https://huggingface.co/PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers/tree/main/vae
             vae = AutoencoderKL.from_pretrained(f"{args.pipeline_load_from}/vae").to(device).to(weight_dtype)
 
-        tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
-        text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
-        null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
-        null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:
+            tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
+            text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
+            null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
+            null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
     elif args.version == 'alpha':
         vae = AutoencoderKL.from_pretrained(os.path.join(args.pipeline_load_from, "sd-vae-ft-ema")).to(device).to(weight_dtype)
-        t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:
+            t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
 
     work_dir = "."
 

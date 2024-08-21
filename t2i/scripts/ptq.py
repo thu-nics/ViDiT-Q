@@ -67,6 +67,11 @@ def get_args():
 
     return parser.parse_args()
 
+def get_idx_from_prompt_list(subset_list, larger_list):
+    index_dict = {value: index for index, value in enumerate(larger_list)}
+    indexes = [index_dict.get(item, -1) for item in subset_list]
+    return indexes
+
 def set_env(seed=0):
     torch.manual_seed(seed)
     torch.set_grad_enabled(False)
@@ -74,6 +79,9 @@ def set_env(seed=0):
         torch.randn(1, 4, args.image_size, args.image_size)
 
 def visualize(items, bs, sample_steps, cfg_scale):
+
+    if args.precomputed_text_embeds is not None:
+        save_d = torch.load(args.precomputed_text_embeds)
 
     for chunk in tqdm(list(get_chunks(items, bs))[0], unit='batch'):
 
@@ -94,19 +102,24 @@ def visualize(items, bs, sample_steps, cfg_scale):
                 prompts.append(prepare_prompt_ar(prompt, base_ratios, device=device, show=False)[0].strip())
             latent_size_h, latent_size_w = latent_size, latent_size
         if args.version == 'sigma':
-            caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
-                                    return_tensors="pt").to(device)
-            caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
-            caption_embs = caption_embs[:, None]
-            emb_masks = caption_token.attention_mask
-            null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
+            else:
+                caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
+                                        return_tensors="pt").to(device)
+                caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
+                caption_embs = caption_embs[:, None]
+                emb_masks = caption_token.attention_mask
+                null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
         elif args.version == 'alpha':
             if args.precomputed_text_embeds is not None:
-                assert args.txt_file == './t2i/asset/samples.txt'
-                save_d = torch.load('./t2i/asset/text_embeds_pixart_alpha.pth')
-                caption_embs = save_d['caption_embs']
-                emb_masks = save_d['emb_masks']
-                null_y = save_d['null_y']
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
             else:
                 caption_embs, emb_masks = t5.get_text_embeddings(prompts)
                 caption_embs = caption_embs.float()[:,None]
@@ -148,7 +161,7 @@ def visualize(items, bs, sample_steps, cfg_scale):
                 )
             else:
                 raise NotImplementedError
-            
+
         # ptq_config_file = os.path.join(args.ptq_config_path, f"{args.version}/pixart-dpm_{args.exp_name}.yml")
         ptq_config_file = args.ptq_config
         logger = logging.getLogger(__name__)
@@ -210,7 +223,7 @@ def visualize(items, bs, sample_steps, cfg_scale):
         if aq_params.smooth_quant.enable:
             args.smoothq = aq_params.smooth_quant.enable
             qnn.set_smooth_quant(smooth_quant=False, smooth_quant_running_stat=False)
-            smooth_quant_layer_list= ["blocks.27.mlp.fc2"] 
+            smooth_quant_layer_list= ["blocks.27.mlp.fc2"]
             qnn.set_layer_smooth_quant(model=qnn, module_name_list=smooth_quant_layer_list, smooth_quant=True, smooth_quant_running_stat=True)
 
         # ======================================================
@@ -441,15 +454,18 @@ if __name__ == '__main__':
             # pixart-Sigma vae link: https://huggingface.co/PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers/tree/main/vae
             vae = AutoencoderKL.from_pretrained(f"{args.pipeline_load_from}/vae").to(device).to(weight_dtype)
 
-        tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
-        text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
-        null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
-        null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:
+            tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
+            text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
+            null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
+            null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
     elif args.version == 'alpha':
         vae = AutoencoderKL.from_pretrained(os.path.join(args.pipeline_load_from, "sd-vae-ft-ema")).to(device).to(weight_dtype)
         if args.precomputed_text_embeds is not None:
             pass
-        else:   
+        else:
             t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
 
 

@@ -22,8 +22,6 @@ from diffusion.model.nets import PixArtMS_XL_2, PixArt_XL_2
 from diffusion.data.datasets import get_chunks
 from diffusion.data.datasets.utils import *
 
-torch.cuda.set_device(2)
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--image_size', default=1024, type=int)
@@ -42,10 +40,17 @@ def get_args():
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--dataset', default='custom', type=str)
     parser.add_argument('--step', default=-1, type=int)
+    parser.add_argument('--exp_name', default='', type=str)
     parser.add_argument('--save_name', default='test_sample', type=str)
+    parser.add_argument('--save_path', required=True, type=str)
+    parser.add_argument('--precomputed_text_embeds', default=None, type=str)
 
     return parser.parse_args()
 
+def get_idx_from_prompt_list(subset_list, larger_list):
+    index_dict = {value: index for index, value in enumerate(larger_list)}
+    indexes = [index_dict.get(item, -1) for item in subset_list]
+    return indexes
 
 def set_env(seed=0):
     torch.manual_seed(seed)
@@ -55,6 +60,9 @@ def set_env(seed=0):
 
 @torch.inference_mode()
 def visualize(items, bs, sample_steps, cfg_scale):
+
+    if args.precomputed_text_embeds is not None:
+        save_d = torch.load(args.precomputed_text_embeds)
 
     for chunk in tqdm(list(get_chunks(items, bs)), unit='batch'):
 
@@ -79,16 +87,28 @@ def visualize(items, bs, sample_steps, cfg_scale):
             latent_size_h, latent_size_w = latent_size, latent_size
 
         if args.version == 'sigma':
-            caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
-                                    return_tensors="pt").to(device)
-            caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
-            caption_embs = caption_embs[:, None]
-            emb_masks = caption_token.attention_mask
-            null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
+            else:
+                caption_token = tokenizer(prompts, max_length=max_sequence_length, padding="max_length", truncation=True,
+                                        return_tensors="pt").to(device)
+                caption_embs = text_encoder(caption_token.input_ids, attention_mask=caption_token.attention_mask)[0]
+                caption_embs = caption_embs[:, None]
+                emb_masks = caption_token.attention_mask
+                null_y = null_caption_embs.repeat(len(prompts), 1, 1)[:, None]
         elif args.version == 'alpha':
-            caption_embs, emb_masks = t5.get_text_embeddings(prompts)
-            caption_embs = caption_embs.float()[:,None]
-            null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
+            if args.precomputed_text_embeds is not None:
+                indexes = get_idx_from_prompt_list(prompts, save_d['prompts'])
+                caption_embs = save_d['caption_embs'][indexes,:]
+                emb_masks = save_d['emb_masks'][indexes,:]
+                null_y = save_d['null_y'][indexes,:]
+            else:
+                caption_embs, emb_masks = t5.get_text_embeddings(prompts)
+                caption_embs = caption_embs.float()[:,None]
+                null_y = model.y_embedder.y_embedding[None].repeat(len(prompts), 1, 1)[:, None]
 
         print(f'finish embedding')
 
@@ -179,16 +199,6 @@ if __name__ == '__main__':
     model.to(weight_dtype)
     base_ratios = eval(f'ASPECT_RATIO_{args.image_size}_TEST')
 
-    if args.sdvae:
-        # pixart-alpha vae link: https://huggingface.co/PixArt-alpha/PixArt-alpha/tree/main/sd-vae-ft-ema
-        vae = AutoencoderKL.from_pretrained("output/pretrained_models/sd-vae-ft-ema").to(device).to(weight_dtype)
-    else:
-        # pixart-Sigma vae link: https://huggingface.co/PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers/tree/main/vae
-        vae = AutoencoderKL.from_pretrained(f"{args.pipeline_load_from}/vae").to(device).to(weight_dtype)
-
-    tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
-    text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
-
     if args.version == 'sigma':
         if args.sdvae:
             # pixart-alpha vae link: https://huggingface.co/PixArt-alpha/PixArt-alpha/tree/main/sd-vae-ft-ema
@@ -196,14 +206,19 @@ if __name__ == '__main__':
         else:
             # pixart-Sigma vae link: https://huggingface.co/PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers/tree/main/vae
             vae = AutoencoderKL.from_pretrained(f"{args.pipeline_load_from}/vae").to(device).to(weight_dtype)
-
-        tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
-        text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
-        null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
-        null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:
+            tokenizer = T5Tokenizer.from_pretrained(args.pipeline_load_from, subfolder="tokenizer")
+            text_encoder = T5EncoderModel.from_pretrained(args.pipeline_load_from, subfolder="text_encoder").to(device)
+            null_caption_token = tokenizer("", max_length=max_sequence_length, padding="max_length", truncation=True, return_tensors="pt").to(device)
+            null_caption_embs = text_encoder(null_caption_token.input_ids, attention_mask=null_caption_token.attention_mask)[0]
     elif args.version == 'alpha':
         vae = AutoencoderKL.from_pretrained(os.path.join(args.pipeline_load_from, "sd-vae-ft-ema")).to(device).to(weight_dtype)
-        t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
+        if args.precomputed_text_embeds is not None:
+            pass
+        else:
+            t5 = T5Embedder(device=device, local_cache=True, cache_dir=os.path.join(args.pipeline_load_from, "t5-v1_1-xxl"), torch_dtype=torch.float)
 
     work_dir = "."
 
@@ -222,6 +237,7 @@ if __name__ == '__main__':
     os.umask(0o000)  # file permission: 666; dir permission: 777
     os.makedirs(img_save_dir, exist_ok=True)
 
-    save_root = os.path.join(img_save_dir, f"{datetime.now().date()}_{args.dataset}_epoch{epoch_name}_step{step_name}_scale{args.cfg_scale}_step{sample_steps}_size{args.image_size}_bs{args.bs}_samp{args.sampling_algo}_seed{seed}")
+    # save_root = os.path.join(img_save_dir, f"{datetime.now().date()}_{args.dataset}_epoch{epoch_name}_step{step_name}_scale{args.cfg_scale}_step{sample_steps}_size{args.image_size}_bs{args.bs}_samp{args.sampling_algo}_seed{seed}")
+    save_root = os.path.join(args.save_path,f"{args.version}/{args.exp_name}",'generated_imgs')
     os.makedirs(save_root, exist_ok=True)
     visualize(items, args.bs, sample_steps, args.cfg_scale)

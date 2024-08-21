@@ -305,6 +305,7 @@ def save_in_out_data(model: QuantModel, layer: Union[QuantLayer, BaseQuantBlock]
     calib_masks_ = None
     tmp_kwargs = {}
     calib_added_conds = {}
+    iters = 16  # DEBUG_ONLY: not using the whole calib data
     for i in trange(iters):
         if model_type == 'sdxl':
             calib_added_conds["text_embeds"] = calib_added_text_embeds[i * batch_size:(i + 1) * batch_size].to(device)
@@ -377,7 +378,7 @@ def save_in_out_data(model: QuantModel, layer: Union[QuantLayer, BaseQuantBlock]
                 ]
         else:
             cached_inps = torch.cat([x[0] for x in cached_batches])
-        cached_outs = torch.cat([x[1] for x in cached_batches])
+            cached_outs = torch.cat([x[1] for x in cached_batches])
 
     if isinstance(cached_inps, list):
         for i in range(len(cached_inps)):

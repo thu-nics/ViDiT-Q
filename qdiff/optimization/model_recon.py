@@ -42,6 +42,10 @@ def model_reconstruction(model, module, calib_data, config, param_types, opt_tar
             elif module_.weight_quantizer.module_name.split('.')[0] in model.fp_layer_list:
                 logger.info('Ignore {} reconstruction of layer {}'.format(opt_target, full_name))
                 continue
+            # due to differnet input size, skip opt for kv_linear
+            elif 'kv_linear' in module_.weight_quantizer.module_name:
+                logger.info('Ignore {} reconstruction of layer {}'.format(opt_target, full_name))
+                continue
             else:
                 logger.info('{} Reconstruction for layer {}'.format(opt_target, full_name))
                 layer_reconstruction(model, module_, calib_data, config, param_types, opt_target)

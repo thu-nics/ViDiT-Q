@@ -12,12 +12,14 @@ calib_data:
     iters_a: 5000
 quant:
     weight:
+        optimization:
         quantizer:
             n_bits: 8
             per_group: "channel"
             scale_method: 'min_max'
             round_mode: 'nearest'
     activation:
+        optimization:
         quantizer:
             n_bits: 8
             per_group: "token"

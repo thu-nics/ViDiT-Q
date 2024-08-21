@@ -465,7 +465,7 @@ class QuantModel(nn.Module):
                         # if module_name in full_name or ('model.'+ module_name) in full_name:
                             module.set_quant_state(weight_quant=weight_quant, act_quant=act_quant)
                             torch.cuda.empty_cache()
-                            logger.info(f"{full_name}: weight_quant={weight_quant}, act_quant={act_quant}")
+                            # logger.info(f"{full_name}: weight_quant={weight_quant}, act_quant={act_quant}")
                 else:
                     self.set_layer_quant(model=module, module_name_list=module_name_list, group_list=group_list, group_ignore=group_ignore, quant_level='per_layer', weight_quant=weight_quant, act_quant=act_quant, prefix=full_name+".")
 

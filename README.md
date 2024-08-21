@@ -136,12 +136,20 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python t2v/scripts/get_calib_data.py $CFG --ckpt_pa
     - `CFG`: the configuration for opensora inference (we recommend using the same for calib_data generation, PTQ, and quant infernece)
     - `Q_CFG`: the configurations for quantization, we provide example configs in `./t2v/configs/quant/opensora`
         - `w8a8_naive.yaml`: Naive PTQ, tensor-wise static activation quant params
-        - `w8a8_dynamic.yaml`: (🔑 **ViDiT-Q W8A8**) Dynamic Quant, token-wise, dynamic activation quant params
-        - `w6a6_naive_cb.yaml`: (🔑 **ViDiT-Q W6A6**) Dynamic Quant + Naive "smooth quant"-like channel balancing (W8A8 performs relatively good without channel balancing, we use W6A6 to demonstrate the effectiveness of channel balancing)
+        - `w8a8_dynamic.yaml`: Dynamic Quant, token-wise, dynamic activation quant params
+        - `w6a6_naive_cb.yaml`: Dynamic Quant + Naive "smooth quant"-like channel balancing (W8A8 performs relatively good without channel balancing, we use W6A6 to demonstrate the effectiveness of channel balancing)
         - `w4a8_naive_cb.yaml`: Dynamic Quant + Naive "smooth quant"-like channel balancing (naive "smoothquant"-like channel balancing works on W6A6, but fails on W4A8)
-        - `w4a8_timestep_aware_cb.yaml`: (🔑 **ViDiT-Q W4A8**) Dynamic Quant + Timestep-aware channel balancing 
+        - `w4a8_timestep_aware_cb.yaml`: Dynamic Quant + Timestep-aware channel balancing 
     - `CALIB_DATA_DIR`: the path of calibration data
     - `OUTDIR`: the path of outputs, including quantized checkpoint and copied configs
+
+- We show the correspondence between the "ViDiT-Q" plans in the paper and config files as follows:
+
+| Plan | CFG Name | 
+|---|---|
+| **ViDiT-Q W8A8**  | `w8a8_dynamic.yaml`  |
+| **ViDiT-Q W6A6**  | `w6a6_naive_cb.yaml`  |
+| **ViDiT-Q W4A8**  | `w4a8_timestep_aware_cb.yaml`  |
 
 - the `--part_fp` denotes skip the quantization of a few layers (they only account for a negligible amount of computation (<1%)), the arg is defined in `opensora/utils/config_utils.py`, which reads the `part_fp_list` in quant config (default path is `"./t2v/configs/quant/opensora/remain_fp.txt"`). 
 
@@ -239,73 +247,42 @@ python t2v/scripts/get_sensitivity.py $CFG --ckpt_path $CKPT_PATH --outdir $OUTD
 
 ## 🖼️ image generation
 
-### 1. Downloading model weights
+### 0.0 Downloading model weights
 Download the corresponding model weights at the following links. For PixArt-alpha, please place the folders for the tokenizer and VAE weights under the same directory.
 
 Model weights: \[[PixArt-alpha](https://huggingface.co/PixArt-alpha/PixArt-alpha/resolve/main/PixArt-XL-2-1024-MS.pth)\, 
                  [PixArt-sigma](https://huggingface.co/PixArt-alpha/PixArt-Sigma/blob/main/PixArt-Sigma-XL-2-1024-MS.pth)] <br>
 Tokenizer and vae weights: \[PixArt-alpha: ([t5](https://huggingface.co/PixArt-alpha/PixArt-alpha/tree/main/t5-v1_1-xxl),[vae](https://huggingface.co/PixArt-alpha/PixArt-alpha/tree/main/sd-vae-ft-ema)), [PixArt-sigma](https://huggingface.co/PixArt-alpha/pixart_sigma_sdxlvae_T5_diffusers)\] 
 
-### 2. get calibration dataset
-```shell
-version="alpha"  # model type (alpha or sigma)
-sd_vae_t5="/mnt/public/video_quant/checkpoint/huggingface"  # path to text encoder and vae checkpoints
-model_path="./logs/pixart/pixart_alpha/PixArt-XL-2-1024-MS.pth"  # path to PixArt weights
-bitwidth_setting="w8a8"  # quantization bit width [w8a8, w4a8]
-save_path="./logs/pixart/calib_data"  # the path to save calibration dataset
+### 0.1 (optional) Precompute the text embedding
 
-# Step 1: Obtaining the Calibration Dataset:
-python ./t2i/scripts/get_calib_data.py \
-        --version $version \
-        --pip_eline_load_from $sd_vae_t5 \
-        --model_path $model_path \
-        --save_path $savepath
-```
+> The pixart model family adopts the `T5-XXL` as text encoder, which cost 10GB GPU memory, to save the GPU memory and the long model loading time, we support precompute the text embeddings. 
 
-### 3. Post Training Quantization (PTQ) Process
-#### 3.1 ptq with smooth quant
-```shell
-version="alpha"  # model type (alpha or sigma)
-sd_vae_t5="/mnt/public/video_quant/checkpoint/huggingface"  # path to text and image encoder checkpoints
-model_path="./logs/pixart/pixart_alpha/PixArt-XL-2-1024-MS.pth"  # path to PixArt weights
-bitwidth_setting="w8a8"  # quantization bit width [w8a8, w4a8]
-save_path="./logs/pixart"  # the path to save the result
-ptq_config="t2i/configs/quant/alpha/pixart-dpm_w8a8.yml"  # the quantization config
-calib_data_path="./logs/pixart/calib_data"
+- `bash ./t2i/shell_scripts/get_text_embeds.sh $GPU_ID`: read the prompts from `./t2i/asset/${TXT_NAME}.txt`, and save the T5 text embeddings into a file named like`text_embeds_alpha_calib`. This file could be specified with the `--precompute_text_embeds` for further processes.
+    - We provide 3 prompt lists:
+        - `calib.txt`: the first 64 prompts for pixart example prompts.
+        - `samples.txt`: the complete 120 prompts for pixart example prompts.
+        - `coco_1024.txt`: the first 1024 prompts for coco annotations (used for evaluation). 
+    - The text embeds for pixart-alpha and sigma is the same for less than 120 tokens (pixart-alpha maximum token length 120, pixart-sigma maximum token lengyh 300). 
 
-# Step 2: Post-Training Quantization:
-python ./t2i/scripts/ptq.py \
-        --version $version \
-        --pipeline_load_from $sd_vae_t5 \
-        --model_path $model_path \
-        --bitwidth_setting $bitwidth_setting \
-        --save_path $save_path \
-        --ptq_config $ptq_config \
-        --calib_data_path $calib_data_path
-```
+### 0.1 FP16 Inference
 
-### 4. Inference Quantized Model
-```shell
-version="alpha"  # model type (alpha or sigma)
-sd_vae_t5="/mnt/public/video_quant/checkpoint/huggingface"  # path to text encoder and vae checkpoints
-model_path="./logs/pixart/pixart_alpha/PixArt-XL-2-1024-MS.pth"  # path to PixArt weights
-bitwidth_setting="w8a8"  # quantization bit width [w8a8, w4a8]
-save_path="logs/pixart/alpha/w8a8/generated_imgs"  # the path to save generated images
-# quant_act="True"  # if to quantize the weight
-# quant_weight="True"  # if to quantize the activation
-quant_path="logs/pixart/alpha/w8a8"  # the path of the ptq results
+- `bash ./t2v/shell_scripts/fp16_inference.sh $GPU_ID`: FP inference for image generation. 
+    - configure the `--version` to choose the 'alpha' or 'sigma'
+    - specify the path of computed text embeds with `--precompute_text_embeds`
 
-# # Step 3: Quantized Inference:
-python ./t2i/scripts/quant_txt2img.py \
-        --version $version \
-        --pipeline_load_from $sd_vae_t5 \
-        --model_path $model_path \
-        --bitwidth_setting $bitwidth_setting \
-        --quant_path  $quant_path \
-        --save_path $save_path \
-        --quant_act \  
-        --quant_weight \ 
-```
+### 1.1 Generate calibration data
+
+- `bash ./t2v/shell_scripts/get_calib_data.sh $GPU_ID`: Generate the calibration data.
+
+### 1.2 Post Training Quantization (PTQ) Process
+
+- `bash ./t2v/shell_scripts/ptq.sh $GPU_ID`: conducting the PTQ process based on calib data, generate the quantized checkpoint.
+    - the quantization configs are presented in `t2i/configs/quant/$version` folder, the `w8a8_naive.yaml` is the baseline quantization, and `w8a8.yaml` is the ViDiT-Q plan. 
+
+### 1.3 Quantizad Inference.
+
+- `bash ./t2v/shell_scripts/quant_inference.sh $GPU_ID`: conducting quantized model infernece. 
 
 <br>
 

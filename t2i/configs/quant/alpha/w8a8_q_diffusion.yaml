@@ -8,21 +8,19 @@ calib_data:
     n_steps: 19
     batch_size: 4  # used for quant param initialization
     n_samples: 32
-    iters_w: 20000
-    iters_a: 5000
 quant:
     weight:
         optimization:
             # assume that weight/act quantize param opt together
             joint_weight_act_opt: False
             use_grad: False
-            iters: 1000
+            iters: 100
             loss:
                 lambda_coeff: 0.5
                 warmup: 0.0
             params: 
                 #alpha: 
-                    #lr: 1.e-2
+                    #lr: 1.e-3
         quantizer:
             n_bits: 8
             per_group: "channel"
@@ -34,13 +32,13 @@ quant:
         optimization:
              joint_weight_act_opt: False
              use_grad: False
-             iters: 10
+             iters: 100
              loss:
-                 lambda_coeff: 1.0
+                 lambda_coeff: 0.5
                  warmup: 0.0
              params:
                  delta:
-                     lr: 1.e-4
+                     lr: 1.e-5
                   #alpha: 
                       #lr: 1.e-2
         quantizer:

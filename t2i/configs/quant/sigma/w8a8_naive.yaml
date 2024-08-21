@@ -14,6 +14,7 @@ calib_data:
     iters_a: 5000
 quant:
     weight:
+        optimization:
         quantizer:
             n_bits: 8
             per_group: "channel"
@@ -22,6 +23,7 @@ quant:
             round_mode: 'nearest'
             timestep_wise: False
     activation:
+        optimization:
         quantizer:
             n_bits: 8
             per_group: False
