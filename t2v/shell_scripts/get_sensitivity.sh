@@ -1,5 +1,5 @@
 # get the sensitivity through the sensitivity
-CFG="./t2v/configs/quant/W8A8/16x512x512.py" # the opensora config
+CFG="./t2v/configs/quant/opensora/16x512x512.py" # the opensora config
 CKPT_PATH="./logs/split_ckpt/OpenSora-v1-HQ-16x512x512-split.pth"  # splited ckpt
 TEXT_EMBEDS_OUTDIR="./logs/text_embeds/opensora"
 OUTDIR="./logs/w8a8_ptq"  # your path of the w8a8 ptq result

@@ -131,10 +131,14 @@ class QuantModel(nn.Module):
         # update the QuantModel quant_state
         self.weight_quant = weight_quant
         self.act_quant = act_quant
-        
+
         for m in self.model.modules():
             if isinstance(m, (QuantLayer, BaseQuantBlock)):
                 m.set_quant_state(weight_quant, act_quant)
+
+        # Keep the fp_layer_list as FP
+        if hasattr(self, "fp_layer_list"):
+            self.set_layer_quant(model=self, module_name_list=self.fp_layer_list, quant_level='per_layer', weight_quant=False, act_quant=False, prefix="")
 
     def get_quant_state(self):
         return self.weight_quant, self.act_quant
@@ -282,10 +286,14 @@ class QuantModel(nn.Module):
                 if isinstance(module_, quantizer_type):
                     if opt_d[opt_target] is not None:
                         for param_type in opt_d[opt_target]:
-                            buffer_ = getattr(module_, param_type)
-                            assert isinstance(buffer_, torch.Tensor)
-                            delattr(module_, param_type)
-                            module_.register_parameter(param_type, nn.Parameter(buffer_))
+                            # skip the conversion for layers that remain FP
+                            if module_.module_name.split('.')[0] in self.fp_layer_list:
+                                continue
+                            else:
+                                buffer_ = getattr(module_, param_type)
+                                assert isinstance(buffer_, torch.Tensor)
+                                delattr(module_, param_type)
+                                module_.register_parameter(param_type, nn.Parameter(buffer_))
                 else:
                     self.replace_quant_buffer_with_parameter(opt_d, module=module_)
 
@@ -309,10 +317,13 @@ class QuantModel(nn.Module):
                     # if opt_d[opt_target] is not None:
                     if opt_d[opt_target] is not None:
                         for param_type in opt_d[opt_target]:
-                            buffer_ = getattr(module_, param_type).data
-                            assert isinstance(buffer_, torch.Tensor)
-                            delattr(module_, param_type)
-                            module_.register_buffer(param_type, buffer_)
+                            if module_.module_name.split('.')[0] in self.fp_layer_list:
+                                continue
+                            else:
+                                buffer_ = getattr(module_, param_type).data
+                                assert isinstance(buffer_, torch.Tensor)
+                                delattr(module_, param_type)
+                                module_.register_buffer(param_type, buffer_)
                     # if opt_d['activation'] is not None:
                     #     for param_type in opt_d['activation']:
                     #         buffer_ = getattr(module_, param_type)
@@ -454,7 +465,7 @@ class QuantModel(nn.Module):
                         # if module_name in full_name or ('model.'+ module_name) in full_name:
                             module.set_quant_state(weight_quant=weight_quant, act_quant=act_quant)
                             torch.cuda.empty_cache()
-                            logger.info(f"{full_name}: weight_quant={weight_quant}, act_quant={act_quant}")
+                            # logger.info(f"{full_name}: weight_quant={weight_quant}, act_quant={act_quant}")
                 else:
                     self.set_layer_quant(model=module, module_name_list=module_name_list, group_list=group_list, group_ignore=group_ignore, quant_level='per_layer', weight_quant=weight_quant, act_quant=act_quant, prefix=full_name+".")
 
@@ -494,7 +505,7 @@ class QuantModel(nn.Module):
                             if  module_name in module.module_name:
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: weight_bit={n_bit}")
+                                # logger.info(f"{full_name}: weight_bit={n_bit}")
                     else:
                         self.set_layer_weight_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='per_layer', bit_type=bit_type, prefix=full_name+".")
                 elif bit_type == 'act':
@@ -503,7 +514,7 @@ class QuantModel(nn.Module):
                             if  module_name in module.module_name:
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: act_bit={n_bit}")
+                                # logger.info(f"{full_name}: act_bit={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='per_layer', bit_type=bit_type, prefix=full_name+".")
 
@@ -536,14 +547,14 @@ class QuantModel(nn.Module):
                     if isinstance(module, WeightQuantizer):
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: weight_quant={n_bit}")
+                                # logger.info(f"{full_name}: weight_quant={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='reset', bit_type=bit_type, prefix=full_name+".")
                 if bit_type == 'act':
                     if isinstance(module, ActQuantizer):
                                 module.bitwidth_refactor(n_bit)
                                 torch.cuda.empty_cache()
-                                logger.info(f"{full_name}: act_quant={n_bit}")
+                                # logger.info(f"{full_name}: act_quant={n_bit}")
                     else:
                         self.set_layer_bit(model=module, n_bit=n_bit, module_name_list=module_name_list, group_list=group_list, quant_level='reset', bit_type=bit_type, prefix=full_name+".")
 

@@ -1,0 +1,41 @@
+part_fp_list: "./t2v/configs/quant/opensora/remain_fp.txt"
+model:
+    model_id: "opensora"
+    model_type: 'opensora'  # ['sd','sdxl']
+conditional: True
+cfg_split: True
+mixed_precision: [4,6,8]
+calib_data:
+    path: "your path of calib data"
+    n_steps: 10    # calib_data_sample_steps = total setps // n_steps
+    batch_size: 4  # used for quant param initialization
+    n_samples: 10
+quant:
+    weight:
+        quantizer:
+            n_bits: 4
+            per_group: 'channel'
+            scale_method: 'min_max'
+            # round_mode: 'learned_hard_sigmoid'
+            round_mode: 'nearest'
+    activation:
+        quantizer:
+            n_bits: 8
+            per_group: 'token'
+            #per_group: False
+            dynamic: True
+            scale_method: 'min_max'
+            round_mode: 'nearest_ste'
+            running_stat: False # when dynamic, running_stat=False
+            sym: False
+            n_spatial_token: 1024  # for 16x512x512
+            n_temporal_token: 16
+            n_prompt: 120
+            smooth_quant:
+                enable: True
+                channel_wise_scale_type: momentum_act_max
+                momentum: 0.95
+                alpha: 0.12
+    grad_checkpoint: False
+resume_with_w_quantized:
+    path: None

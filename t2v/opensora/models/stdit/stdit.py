@@ -265,12 +265,18 @@ class STDiT(nn.Module):
         t0 = self.t_block(t)  # [B, 6 * C]
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
 
-        # INFO: the mask_select will cause variant input y.shape
-        # making quantization hard to process
-        # replace with 0. masking
+        # INFO: the default opensora implementation is equivalent with mask_select=True
+        # the mask_select will cause variant input y.shape (varying input activation shape), making **static** quantization hard to process
+        # when act_quantizer is not dynamic, we use MASK_SELECT=False, which replace selection with 0. masking to ensure the same input shape
+        # however, when the prompt length is very short (much smaller than 120, e.g., the UCF101 dataset), using MASK_SELECT=False will incur bad results
         if mask is not None:
+            from qdiff.quantizer.dynamic_quantizer import DynamicActQuantizer
+            # DIRTY, assume that all layers in the stdit model share the same quantization configuration
+            MASK_SELECT = True
+            if not isinstance(self.final_layer.linear.act_quantizer, DynamicActQuantizer): # static quant param
+                if self.final_layer.linear.act_quantizer.per_group == 'token':
+                    MASK_SELECT = False
 
-            MASK_SELECT=True
             if MASK_SELECT:
                 ## Original version: y is smaller 3684/3840
                 if mask.shape[0] != y.shape[0]:
@@ -283,7 +289,10 @@ class STDiT(nn.Module):
                 # Interestingly, the original STDiT model takes in [bs*2] as y and [bs] as mask
                 if mask.shape[0] != y.shape[0]:
                     assert y.shape[0] == 2*mask.shape[0]
-                    mask_ = mask.repeat([2,1])
+                    try:
+                        mask_ = mask.repeat([2,1])
+                    except:
+                        import ipdb; ipdb.set_trace()
                 else:
                     mask_ = mask
 

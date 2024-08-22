@@ -739,7 +739,7 @@ class GaussianDiffusion:
 
                 if getattr(qnn, 'timestep_wise_mp', False):
                     key = get_key_for_value(qnn.time_mp_config_weight, i)
-                    
+
                     if key is None:
                         raise RuntimeError(f"this timestep {i} is not included by the config")
 

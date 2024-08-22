@@ -72,7 +72,7 @@ def main():
     
     dtype = to_torch_dtype(cfg.dtype)
     set_random_seed(seed=cfg.seed)
-    
+
     # ======================================================
     # 3. build model & load weights
     # ======================================================
@@ -135,6 +135,17 @@ def main():
     if opt.get('smooth_quant_alpha', None):
         assert aq_params.smooth_quant.enable
         aq_params.smooth_quant.alpha = opt.smooth_quant_alpha
+        with open(os.path.join(outpath, 'config.yaml'), 'r') as file:
+            quant_config_content = yaml.safe_load(file)
+        old_smooth_quant_alpha = quant_config_content['quant']['activation']['quantizer']['smooth_quant']['alpha']
+        if isinstance(old_smooth_quant_alpha, list):
+            new_smooth_quant_alpha = opt.smooth_quant_alpha
+        else:
+            new_smooth_quant_alpha = opt.smooth_quant_alpha[0]  # single value
+        quant_config_content['quant']['activation']['quantizer']['smooth_quant']['alpha'] = new_smooth_quant_alpha
+        with open(os.path.join(outpath, 'config.yaml'), 'w') as file:
+            yaml.dump(quant_config_content, file, default_flow_style=False)
+        logger.info(f"replacing the original alpha {old_smooth_quant_alpha} with the alpha {new_smooth_quant_alpha} given in --arg")
 
     qnn = QuantModel(
         model=model, \
@@ -144,6 +155,11 @@ def main():
     qnn.cuda()
     qnn.eval()
     logger.info(qnn)
+
+    # DIRTY: set the cfg_split as the attribute of the model
+    # the cfg_split is configured in `opensora/schedulers/ippdm/__init__.py`
+    cfg_split = config.get('cfg_split', False)
+    qnn.cfg_split = cfg_split
 
     if not config.quant.grad_checkpoint:
         logger.info('Not use gradient checkpointing for transformer blocks')
@@ -204,8 +220,9 @@ def main():
             calib_xs_save = calib_xs
             calib_ts_save = calib_ts
             calib_cs_save = calib_cs
+            calib_masks_save = calib_masks
             logger.info("begin to calculate the statistic of activation for smooth quant!")
-            assert aq_params.get('dynamic',False)
+            # assert aq_params.get('dynamic',False)
             qnn.set_smooth_quant(smooth_quant=False, smooth_quant_running_stat=True) # Now we use fp16 to save the statistic of activation
             qnn.set_quant_state(False, False)
             # The following code is the same as activation quantization, to calculate the statistic
@@ -217,6 +234,7 @@ def main():
             calib_n_steps = calib_ts.shape[0]
             calib_xs = calib_xs.reshape([calib_n_steps,calib_n_samples]+list(calib_xs.shape[1:])) # split the 1st dim (batch) into 2
             calib_cs = calib_cs.reshape([calib_n_steps,calib_n_samples]+list(calib_cs.shape[1:]))
+            # calib_masks_shape = calib_masks.shape
             calib_masks = calib_masks.reshape([calib_n_steps,calib_n_samples]+list(calib_masks.shape[1:]))
 
             inds = np.arange(calib_xs.shape[1])
@@ -237,12 +255,13 @@ def main():
                     else:
                         raise NotImplementedError
 
-            assert aq_params.get('dynamic',False)
+            # assert aq_params.get('dynamic',False)
             qnn.set_smooth_quant(smooth_quant=True, smooth_quant_running_stat=False) # Now we use fp16 to save the statistic of activation
             qnn.set_layer_smooth_quant(model=qnn, module_name_list=fp_layer_list, smooth_quant=False, smooth_quant_running_stat=False)
             calib_xs = calib_xs_save
             calib_ts = calib_ts_save
             calib_cs = calib_cs_save
+            calib_masks = calib_masks_save
 
         # --- the weight quantization -----
         # enable part quantization
@@ -296,11 +315,13 @@ def main():
                 rounds = int(calib_xs.size(0) / calib_batch_size)
 
                 for i in trange(rounds):
+                    mask_ = calib_masks[inds[i * calib_batch_size:(i + 1) * calib_batch_size]][::2].cuda()
                     if config.model.model_type == "opensora":
                         _ = qnn(calib_xs[inds[i * calib_batch_size:(i + 1) * calib_batch_size]].cuda(),
                             calib_ts[inds[i * calib_batch_size:(i + 1) * calib_batch_size]].cuda(),
                             calib_cs[inds[i * calib_batch_size:(i + 1) * calib_batch_size]].cuda(),
-                            mask=calib_masks[inds[i * calib_batch_size:(i + 1) * calib_batch_size]][::2].cuda(),  # INFO: original opensora model takes in 2*bs conds(y) and bs mask
+                            mask=mask_,  # INFO: original opensora model takes in 2*bs conds(y) and bs mask
+                            # shape: [B, timestep, N_token], the mask are the same across timesteps, so using the 
                         )
                     else:
                         raise NotImplementedError
