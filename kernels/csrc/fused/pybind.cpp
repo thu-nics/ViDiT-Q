@@ -6,6 +6,10 @@ torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
               torch::Tensor &sum_output, // [tokens]
               torch::Tensor &scaling);
 
+torch::Tensor quant_sum_bf16(torch::Tensor &input,  // [..., hidden_size]
+               torch::Tensor &sum_output, // [tokens]
+               torch::Tensor &scaling);
+
 torch::Tensor quant_sum_static(torch::Tensor &input,  // [..., hidden_size]
               torch::Tensor &sum_output, // [tokens]
               torch::Tensor &scaling);
@@ -58,6 +62,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("quant_sum", &quant_sum,
         "quantization kernel, output sum");
   
+  m.def("quant_sum_bf16", &quant_sum_bf16,
+      "quantization kernel, output sum");
+
   m.def("quant_sum_static", &quant_sum_static,
         "quantization kernel, output sum");
 

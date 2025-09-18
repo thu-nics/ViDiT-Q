@@ -106,12 +106,18 @@ class W8A8OF16LinearDynamicInputScale(nn.Module):
         quant_params: QuantParams,
     ):
         # TODO: implement the complete forward pass for other case
+        bias = self.bias
+        if bias is None:
+            bias = torch.zeros(
+                self.out_features, dtype=torch.float16, device=input.device
+            )
+        
         shape = input.shape
         hidden_size = shape[-1]
         output = qgemm.w8a8_of16_bias_weight_asym(
             input.view(-1, hidden_size),
             self.weight,
-            self.bias,
+            bias,
             quant_params.scale_input,
             self.scale_weight,
             quant_params.sum_input,

@@ -582,6 +582,65 @@ torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
   return output;
 }
 
+torch::Tensor quant_sum_bf16(torch::Tensor &input,  // [..., hidden_size]
+                        torch::Tensor &sum_output, // [tokens]
+                        torch::Tensor &scaling)
+{
+  CHECK_CUDA(input);
+  CHECK_CUDA(sum_output);
+  CHECK_CUDA(scaling);
+
+  CHECK_CONTIGUOUS(input);
+  CHECK_CONTIGUOUS(sum_output);
+  CHECK_CONTIGUOUS(scaling);
+
+  CHECK_DTYPE(input, torch::kBFloat16);
+  CHECK_DTYPE(sum_output, torch::kBFloat16);
+  CHECK_DTYPE(scaling, torch::kBFloat16);
+
+  int hidden_size = input.size(-1);
+  int num_tokens = input.numel() / hidden_size;
+
+  assert(hidden_size <= 8192);
+
+  if (hidden_size > 4096) {
+    assert(hidden_size % 256 == 0);
+  } else {
+    assert(hidden_size % 128 == 0);
+  }
+
+  CHECK_SHAPE(sum_output, num_tokens);
+  CHECK_SHAPE(scaling, num_tokens);
+
+  at::Tensor output = at::empty_like(input, torch::kInt8);
+
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+  if (hidden_size <= 4096) {
+    dim3 grid(num_tokens);
+    dim3 block(hidden_size / 4);
+
+    QuantKernelBF16<float2, SumType::kPostQuant><<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input.data_ptr<at::BFloat16>()),
+      output.data_ptr<int8_t>(),
+      reinterpret_cast<__nv_bfloat16*>(sum_output.data_ptr<at::BFloat16>()),
+      reinterpret_cast<__nv_bfloat16*>(scaling.data_ptr<at::BFloat16>()),
+      num_tokens, hidden_size);
+  }
+  else {
+    dim3 grid(num_tokens);
+    dim3 block(hidden_size / 8);
+
+    QuantKernelBF16<float4, SumType::kPostQuant><<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input.data_ptr<at::BFloat16>()),
+      output.data_ptr<int8_t>(),
+      reinterpret_cast<__nv_bfloat16*>(sum_output.data_ptr<at::BFloat16>()),
+      reinterpret_cast<__nv_bfloat16*>(scaling.data_ptr<at::BFloat16>()),
+      num_tokens, hidden_size);
+  }
+
+  return output;
+}
 
 torch::Tensor quant_sum_static(torch::Tensor &input,  // [..., hidden_size]
               torch::Tensor &sum_output, // [tokens]
