@@ -27,6 +27,98 @@ template <typename T> __device__ __forceinline__ T gelu_func(const T &x) {
 
 // TODO: ActQuantKernel
 
+template<typename DTypeLoad = float2, SumType sum_type = SumType::kNone, bool dynamic = true>
+__global__ void QuantKernelBF16(const __nv_bfloat16 *__restrict__ input,
+                            int8_t *__restrict__ output,
+                            __nv_bfloat16 *__restrict__ sum_output,
+                            __nv_bfloat16 *__restrict__ scale,
+                            int num_tokens, int hidden_size)
+{
+  const int tidx = threadIdx.x;
+  const int bidx = blockIdx.x;
+  constexpr int n_packed = (sizeof(DTypeLoad) / sizeof(__nv_bfloat162));
+  static_assert(n_packed == 2 || n_packed == 4);
+  const int j = (n_packed == 2) ? (tidx << 2) : (tidx << 3);
+
+  __nv_bfloat162 x_val[n_packed];
+  *(DTypeLoad*)(&x_val[0]) = *(DTypeLoad*)(&input[bidx * hidden_size + j]);
+
+  if (sum_type == SumType::kPreQuant) {
+    float local_sum = 0.0f;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed; i++) {
+      local_sum += __bfloat162float(x_val[i].x);
+      local_sum += __bfloat162float(x_val[i].y);
+    }
+
+    float sum = vllm::blockReduceSum(local_sum);
+    if (tidx == 0) {
+      sum_output[bidx] = __float2bfloat16_rn(sum);
+    }
+  }
+
+  __shared__ float s_amax;
+
+  if constexpr (dynamic) {
+    float amax_val = 0.0f;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed; i++) {
+      amax_val = fmaxf(amax_val,
+                 fabsf(__bfloat162float(x_val[i].x)));
+      amax_val = fmaxf(amax_val,
+                 fabsf(__bfloat162float(x_val[i].y)));
+
+    }
+
+    float block_amax_val = vllm::blockReduceMax(amax_val);
+    if (tidx == 0) {
+      s_amax = block_amax_val;
+      scale[bidx] = __float2bfloat16_rn(block_amax_val / 127.0f);
+    }
+  } else {
+    if (tidx == 0) {
+      s_amax = __bfloat162float(scale[bidx]);
+    }
+  }
+
+  __syncthreads();
+  float tmp_scale = 127.0f / s_amax;
+
+  char4 o_val[n_packed / 2];
+
+#pragma unroll
+  for (uint32_t i = 0; i < n_packed; i += 2) {
+    o_val[i / 2] = make_char4(
+      float_to_int8_rn(__bfloat162float(x_val[i].x) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i].y) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i + 1].x) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i + 1].y) * tmp_scale)
+    );
+  }
+
+  if constexpr (sum_type == SumType::kPostQuant) {
+    int32_t local_sum = 0;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed / 2; i++) {
+      local_sum += static_cast<int32_t>(o_val[i].x);
+      local_sum += static_cast<int32_t>(o_val[i].y);
+      local_sum += static_cast<int32_t>(o_val[i].z);
+      local_sum += static_cast<int32_t>(o_val[i].w);
+    }
+
+    int32_t sum = vllm::blockReduceSum(local_sum);
+    if (tidx == 0) {
+      sum_output[bidx] = __float2bfloat16_rn(__int2float_rn(sum) / tmp_scale);
+    }
+  }
+
+  using OutputType = typename std::conditional<n_packed == 2, uint32_t, uint64_t>::type;
+  *reinterpret_cast<OutputType*>(&output[bidx * hidden_size + j]) = *reinterpret_cast<OutputType*>(&o_val);
+}
+
 template<typename DTypeLoad=float2, SumType sum_type=SumType::kNone, bool dynamic=true>
 __global__ void QuantKernel(const half *__restrict__ input,
                              int8_t *__restrict__ output, half *__restrict__ sum_output, half *__restrict__ scale,
