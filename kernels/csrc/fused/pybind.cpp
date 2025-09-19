@@ -1,6 +1,6 @@
 #include <torch/extension.h>
 #include <cuda_fp16.h>
-
+#include <cuda_bf16.h>
 
 torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
               torch::Tensor &sum_output, // [tokens]
@@ -53,7 +53,7 @@ void layernorm_nobias_t2i_quant_sum_fuse(torch::Tensor &output,    // [batch_siz
               torch::Tensor &scaling, // [batch_size * tokens]
               float epsilon);
 
-torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens, hidden_size]
+std::tuple<at::Tensor, at::Tensor> gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens, hidden_size]
               torch::Tensor &gate_msa, // [batch_size, hidden_size]
               torch::Tensor &residual // [batch_size * tokens, hidden_size]
               );
@@ -61,9 +61,9 @@ torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens,
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("quant_sum", &quant_sum,
         "quantization kernel, output sum");
-  
+
   m.def("quant_sum_bf16", &quant_sum_bf16,
-      "quantization kernel, output sum");
+        "quantization kernel, output sum");
 
   m.def("quant_sum_static", &quant_sum_static,
         "quantization kernel, output sum");

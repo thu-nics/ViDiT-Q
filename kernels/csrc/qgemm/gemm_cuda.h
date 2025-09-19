@@ -22,6 +22,14 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
                       torch::Tensor input_sum,
                       torch::Tensor zp_weight);
 
+torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
+                    torch::Tensor weight,
+                    torch::Tensor bias,
+                    torch::Tensor scale_input,
+                    torch::Tensor scale_weight,
+                    torch::Tensor sum_input,
+                    torch::Tensor zp_weight);
+
 void w4a8_of16_nobias_weight_asym_qserve(torch::Tensor _in_feats,
                         torch::Tensor _kernel,
                         torch::Tensor _wscales,
