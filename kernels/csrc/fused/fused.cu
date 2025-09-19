@@ -692,7 +692,7 @@ torch::Tensor quant_sum_bf16(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
 
-  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+  // c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
 
   CHECK_CONTIGUOUS(input);

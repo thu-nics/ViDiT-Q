@@ -5,7 +5,6 @@
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 #include <c10/cuda/CUDAGuard.h>
-
 #include "../../cp_async.cuh"
 #include "../../mma.cuh"
 #include "../../permuted_smem.cuh"
@@ -1225,6 +1224,7 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
   CHECK_SHAPE(zp_weight, N);
 
   at::Tensor output = torch::empty({input.size(0), weight.size(0)}, input.options().dtype(torch::kHalf));
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   const int CTA_M = 128;
   const int CTA_N = 128;
@@ -1247,7 +1247,7 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
   dim3 grid(CTA_STRIDE, M / CTA_M, div_ceil(N / CTA_N, CTA_STRIDE));
   dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
     input.data_ptr<int8_t>(),
     weight.data_ptr<int8_t>(),
     reinterpret_cast<half*>(output.data_ptr()),
@@ -1310,6 +1310,7 @@ torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
 
   at::Tensor output = torch::empty({M, N}, input.options().dtype(torch::kBFloat16));
 
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   constexpr int CTA_M = 128;
   constexpr int CTA_N = 128;
   constexpr int CTA_K = 64;
@@ -1335,7 +1336,7 @@ torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
   dim3 grid(CTA_STRIDE, M / CTA_M, (N + CTA_N * CTA_STRIDE - 1) / (CTA_N * CTA_STRIDE));
   dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
       input.data_ptr<int8_t>(),
       weight.data_ptr<int8_t>(),
       reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
@@ -1363,7 +1364,7 @@ torch::Tensor w8a8_of16_bias_weight_sym(torch::Tensor input,
   CHECK_CUDA(scale_input);
   CHECK_CUDA(scale_weight);
 
-  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+  c10::cuda::OptionalCUDAGuard guard(input.device());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -1387,7 +1388,12 @@ torch::Tensor w8a8_of16_bias_weight_sym(torch::Tensor input,
   CHECK_SHAPE(scale_input, M);
   CHECK_SHAPE(scale_weight, N);
 
+  
   at::Tensor output = torch::empty({input.size(0), weight.size(0)}, input.options().dtype(torch::kHalf));
+  // printf("%d,%d,%d,%d,%d",input.device().index(),weight.device().index(),scale_input.device().index(),bias.device().index(),output.device().index());
+
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
 
   const int CTA_M = 128;
   const int CTA_N = 128;
@@ -1410,7 +1416,7 @@ torch::Tensor w8a8_of16_bias_weight_sym(torch::Tensor input,
   dim3 grid(CTA_STRIDE, M / CTA_M, div_ceil(N / CTA_N, CTA_STRIDE));
   dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
     input.data_ptr<int8_t>(),
     weight.data_ptr<int8_t>(),
     reinterpret_cast<half*>(output.data_ptr()),
@@ -1463,6 +1469,8 @@ torch::Tensor w8a8_bf16_bias_weight_sym(torch::Tensor input,
 
   at::Tensor output = torch::empty({input.size(0), weight.size(0)}, input.options().dtype(torch::kBFloat16));
 
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
   const int CTA_M = 128;
   const int CTA_N = 128;
   const int CTA_K = 64;
@@ -1484,7 +1492,7 @@ torch::Tensor w8a8_bf16_bias_weight_sym(torch::Tensor input,
   dim3 grid(CTA_STRIDE, M / CTA_M, div_ceil(N / CTA_N, CTA_STRIDE));
   dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
     input.data_ptr<int8_t>(),
     weight.data_ptr<int8_t>(),
     reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
@@ -1523,6 +1531,7 @@ torch::Tensor w8a8_o32(torch::Tensor input,
 
   at::Tensor output = torch::empty({input.size(0), weight.size(0)}, input.options().dtype(torch::kInt32));
 
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int CTA_M = 128;
   const int CTA_N = 128;
   const int CTA_K = 64;
@@ -1546,7 +1555,7 @@ torch::Tensor w8a8_o32(torch::Tensor input,
   dim3 grid(CTA_STRIDE, M / CTA_M, div_ceil(N / CTA_N, CTA_STRIDE));
   dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
 
-  kernel_func<<<grid, block, smem_max>>>(
+  kernel_func<<<grid, block, smem_max, stream>>>(
     input.data_ptr<int8_t>(),
     weight.data_ptr<int8_t>(),
     nullptr,
