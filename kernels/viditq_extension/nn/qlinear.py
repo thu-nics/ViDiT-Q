@@ -33,13 +33,11 @@ class W8A8OF16LinearDynamicInputScale(nn.Module):
         self.register_buffer(
             "bias",
             (
-                torch.empty(
+                torch.zeros(
                     self.out_features,
                     dtype=torch.float16,
                     requires_grad=False,
                 )
-                if self.has_bias
-                else None
             ),
         )
 
@@ -134,6 +132,7 @@ class W8A8OF16LinearDynamicInputScale(nn.Module):
         # TODO: implement the complete forward pass for other case
         bias = self.bias
         if bias is None:
+            print(self.out_features, input.device)
             bias = torch.zeros(
                 self.out_features, dtype=torch.float16, device=input.device
             )

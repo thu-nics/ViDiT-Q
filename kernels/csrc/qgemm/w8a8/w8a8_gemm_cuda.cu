@@ -4,6 +4,7 @@
 #include <ATen/ATen.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include "../../cp_async.cuh"
 #include "../../mma.cuh"
@@ -1193,6 +1194,8 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
   CHECK_CUDA(sum_input);
   CHECK_CUDA(zp_weight);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
   CHECK_CONTIGUOUS(bias);
@@ -1274,6 +1277,8 @@ torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
   CHECK_CUDA(scale_weight);
   CHECK_CUDA(sum_input);
   CHECK_CUDA(zp_weight);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -1358,6 +1363,8 @@ torch::Tensor w8a8_of16_bias_weight_sym(torch::Tensor input,
   CHECK_CUDA(scale_input);
   CHECK_CUDA(scale_weight);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
   CHECK_CONTIGUOUS(bias);
@@ -1430,6 +1437,8 @@ torch::Tensor w8a8_bf16_bias_weight_sym(torch::Tensor input,
   CHECK_CUDA(scale_input);
   CHECK_CUDA(scale_weight);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
   CHECK_CONTIGUOUS(bias);
@@ -1495,6 +1504,8 @@ torch::Tensor w8a8_o32(torch::Tensor input,
 {
   CHECK_CUDA(input);
   CHECK_CUDA(weight);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);

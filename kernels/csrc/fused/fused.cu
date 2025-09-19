@@ -1,4 +1,5 @@
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 
 #include "../dispatch_utils.h"
@@ -586,6 +587,8 @@ void layernorm_nobias(torch::Tensor &output,    // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(weight);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -624,6 +627,9 @@ torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -686,6 +692,9 @@ torch::Tensor quant_sum_bf16(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
+
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
   CHECK_CONTIGUOUS(scaling);
@@ -745,6 +754,8 @@ torch::Tensor quant_sum_static(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -806,6 +817,8 @@ torch::Tensor gelu_quant_sum(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -870,6 +883,8 @@ void layernorm_nobias_quant_nosum_fuse(torch::Tensor &output,    // [..., hidden
   CHECK_CUDA(weight);
   CHECK_CUDA(scaling);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -914,6 +929,8 @@ void layernorm_nobias_quant_sum_fuse(torch::Tensor &output,    // [batch_size * 
   CHECK_CUDA(weight);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
@@ -963,6 +980,8 @@ void layernorm_nobias_t2i_fuse(torch::Tensor &output,    // [batch_size * tokens
   CHECK_CUDA(weight);
   CHECK_CUDA(shift_msa);
   CHECK_CUDA(scale_msa);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
@@ -1022,6 +1041,8 @@ void layernorm_nobias_t2i_quant_sum_fuse(torch::Tensor &output,    // [batch_siz
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -1077,6 +1098,8 @@ std::tuple<at::Tensor, at::Tensor> gate_residual_fuse(torch::Tensor &input,  // 
   CHECK_CUDA(input);
   CHECK_CUDA(gate_msa);
   CHECK_CUDA(residual);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
   
   CHECK_CONTIGUOUS(input);
   CHECK_LASTDIM_CONTIGUOUS(gate_msa);

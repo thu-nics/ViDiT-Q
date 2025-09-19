@@ -9,6 +9,7 @@
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #define OP_M 16
 #define OP_N 8
