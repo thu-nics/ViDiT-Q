@@ -22,6 +22,12 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
                       torch::Tensor input_sum,
                       torch::Tensor zp_weight);
 
+torch::Tensor w8a8_bf16_bias_weight_sym(torch::Tensor input,
+                      torch::Tensor weight,
+                      torch::Tensor bias,
+                      torch::Tensor scale_input,
+                      torch::Tensor scale_weight);
+
 torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
                     torch::Tensor weight,
                     torch::Tensor bias,

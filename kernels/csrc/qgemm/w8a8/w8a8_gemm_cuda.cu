@@ -623,7 +623,7 @@ __global__ void GemmInt8SharedRegPipelineV2(const int8_t *__restrict__ A, const 
 
 }
 
-
+// only support bfloat16 output, no other dtype like float16 kernel
 template <uint32_t CTA_M, uint32_t CTA_N, uint32_t CTA_K,
           uint32_t WARP_M, uint32_t WARP_N, uint32_t CTA_STRIDE,
           uint32_t K_STAGE = 2,
@@ -632,7 +632,7 @@ template <uint32_t CTA_M, uint32_t CTA_N, uint32_t CTA_K,
 __global__ void GemmInt8SharedRegPipelineBF16(
     const int8_t *__restrict__ A,
     const int8_t *__restrict__ B,
-    __nv_bfloat16 *__restrict__ C,  // ✅ 只支持 BF16 输出
+    __nv_bfloat16 *__restrict__ C, 
     const __nv_bfloat16 *__restrict__ Bias,
     const __nv_bfloat16 *__restrict__ scale_A,
     const __nv_bfloat16 *__restrict__ scale_B,
@@ -1322,17 +1322,9 @@ torch::Tensor w8a8_bf16_bias_weight_asym(torch::Tensor input,
       CTA_M * CTA_N * sizeof(__nv_bfloat16)
   );
 
-  // ✅ 替换为新 kernel（BF16 专用，无 output_dtype）
-  auto kernel_func = GemmInt8SharedRegPipelineBF16<
-      CTA_M, CTA_N, CTA_K,
-      WARP_M, WARP_N,
-      CTA_STRIDE,
-      K_STAGE,
-      /*has_bias=*/true,
-      /*weight_asym=*/true,
-      ScaleMulMode::kMode1>;
 
-  // 设定共享内存上限
+  auto kernel_func = GemmInt8SharedRegPipelineBF16<CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, CTA_STRIDE, K_STAGE, true, true,ScaleMulMode::kMode1>;
+
   cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
 
   dim3 grid(CTA_STRIDE, M / CTA_M, (N + CTA_N * CTA_STRIDE - 1) / (CTA_N * CTA_STRIDE));
@@ -1419,6 +1411,77 @@ torch::Tensor w8a8_of16_bias_weight_sym(torch::Tensor input,
     reinterpret_cast<half*>(bias.data_ptr()),
     reinterpret_cast<half*>(scale_input.data_ptr()),
     reinterpret_cast<half*>(scale_weight.data_ptr()),
+    nullptr,
+    nullptr,
+    M, N, K);
+
+  return output;
+}
+
+torch::Tensor w8a8_bf16_bias_weight_sym(torch::Tensor input,
+                      torch::Tensor weight,
+                      torch::Tensor bias,
+                      torch::Tensor scale_input,
+                      torch::Tensor scale_weight)
+{
+  CHECK_CUDA(input);
+  CHECK_CUDA(weight);
+  CHECK_CUDA(bias);
+  CHECK_CUDA(scale_input);
+  CHECK_CUDA(scale_weight);
+
+  CHECK_CONTIGUOUS(input);
+  CHECK_CONTIGUOUS(weight);
+  CHECK_CONTIGUOUS(bias);
+  CHECK_CONTIGUOUS(scale_input);
+  CHECK_CONTIGUOUS(scale_weight);
+
+  CHECK_DTYPE(input, torch::kInt8);
+  CHECK_DTYPE(weight, torch::kInt8);
+  CHECK_DTYPE(bias, torch::kBFloat16);
+  CHECK_DTYPE(scale_input, torch::kBFloat16);
+  CHECK_DTYPE(scale_weight, torch::kBFloat16);
+
+  const int M = input.size(0);
+  const int N = weight.size(0);
+  const int K = input.size(1);
+
+  CHECK_SHAPE(input, M, K);
+  CHECK_SHAPE(weight, N, K);
+  CHECK_SHAPE(bias, N);
+  CHECK_SHAPE(scale_input, M);
+  CHECK_SHAPE(scale_weight, N);
+
+  at::Tensor output = torch::empty({input.size(0), weight.size(0)}, input.options().dtype(torch::kBFloat16));
+
+  const int CTA_M = 128;
+  const int CTA_N = 128;
+  const int CTA_K = 64;
+  constexpr int WARP_M = 128;
+  constexpr int WARP_N = 32;
+  constexpr int CTA_STRIDE = 1;
+  constexpr int K_STAGE = 3;
+
+  assert(M % CTA_M == 0);
+  assert(N % CTA_N == 0);
+  assert(K % CTA_K == 0);
+
+  size_t smem_max = std::max((CTA_M * CTA_K + CTA_N * CTA_K) * sizeof(int8_t) * K_STAGE, CTA_M * CTA_N * sizeof(__nv_bfloat16));
+
+  auto kernel_func = GemmInt8SharedRegPipelineBF16<CTA_M, CTA_N, CTA_K, WARP_M, WARP_N, CTA_STRIDE, K_STAGE, true, false,ScaleMulMode::kMode1>;
+
+  cudaFuncSetAttribute(kernel_func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_max);
+
+  dim3 grid(CTA_STRIDE, M / CTA_M, div_ceil(N / CTA_N, CTA_STRIDE));
+  dim3 block(32, (CTA_M / WARP_M) * (CTA_N / WARP_N));
+
+  kernel_func<<<grid, block, smem_max>>>(
+    input.data_ptr<int8_t>(),
+    weight.data_ptr<int8_t>(),
+    reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
+    reinterpret_cast<__nv_bfloat16*>(bias.data_ptr()),
+    reinterpret_cast<__nv_bfloat16*>(scale_input.data_ptr()),
+    reinterpret_cast<__nv_bfloat16*>(scale_weight.data_ptr()),
     nullptr,
     nullptr,
     M, N, K);
