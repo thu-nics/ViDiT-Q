@@ -87,7 +87,7 @@ class W8A8OF16LinearDynamicInputScale(nn.Module):
         weight_sym: bool = True,
         init_only: bool = False,
     ):
-        assert linear.weight.dtype == torch.float16
+        assert linear.weight.dtype == torch.float16, f"weight type!=torch.float16, is {linear.weight.dtype}"
 
         if init_only:
             return

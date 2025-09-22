@@ -1234,6 +1234,10 @@ torch::Tensor w8a8_of16_bias_weight_asym(torch::Tensor input,
   constexpr int CTA_STRIDE = 1;
   constexpr int K_STAGE = 3;
 
+  if ((M % CTA_M != 0) || (N % CTA_N != 0) || (K % CTA_K != 0)){
+    printf("(%d,%d)x(%d,%d) is require, but (%d,%d,%d) must %% (%d,%d,%d)==0", M,K,K,N,M,N,K,CTA_M,CTA_N,CTA_K);
+  }
+
   assert(M % CTA_M == 0);
   assert(N % CTA_N == 0);
   assert(K % CTA_K == 0);
