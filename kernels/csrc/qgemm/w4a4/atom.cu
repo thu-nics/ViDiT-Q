@@ -4,6 +4,7 @@
 #include <mma.h>
 #include <stdio.h>
 #include <random>
+#include <c10/cuda/CUDAGuard.h>
 
 // Accumulator: 128 * 128 * sizeof(int32_t) = 64KB
 // Block A + B: 128 * 128 * sizeof(int8_t) * 0.5 * 2 = 16KB

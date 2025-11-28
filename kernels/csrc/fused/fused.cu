@@ -1,10 +1,12 @@
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 
 #include "../dispatch_utils.h"
 #include "../utils.cuh"
 #include "../reduction_utils.cuh"
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 enum class SumType
 {
@@ -26,6 +28,99 @@ template <typename T> __device__ __forceinline__ T gelu_func(const T &x) {
 }
 
 // TODO: ActQuantKernel
+
+template<typename DTypeLoad = float2, SumType sum_type = SumType::kNone, bool dynamic = true>
+__global__ void QuantKernelBF16(const __nv_bfloat16 *__restrict__ input,
+                            int8_t *__restrict__ output,
+                            __nv_bfloat16 *__restrict__ sum_output,
+                            __nv_bfloat16 *__restrict__ scale,
+                            int num_tokens, int hidden_size)
+{
+  const int tidx = threadIdx.x;
+  const int bidx = blockIdx.x;
+  constexpr int n_packed = (sizeof(DTypeLoad) / sizeof(__nv_bfloat162));
+  static_assert(n_packed == 2 || n_packed == 4);
+  const int j = (n_packed == 2) ? (tidx << 2) : (tidx << 3);
+
+  __nv_bfloat162 x_val[n_packed];
+  *(DTypeLoad*)(&x_val[0]) = *(DTypeLoad*)(&input[bidx * hidden_size + j]);
+
+  if (sum_type == SumType::kPreQuant) {
+    float local_sum = 0.0f;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed; i++) {
+      local_sum += __bfloat162float(x_val[i].x);
+      local_sum += __bfloat162float(x_val[i].y);
+    }
+
+    float sum = vllm::blockReduceSum(local_sum);
+    if (tidx == 0) {
+      sum_output[bidx] = __float2bfloat16_rn(sum);
+    }
+  }
+
+  __shared__ float s_amax;
+
+  if constexpr (dynamic) {
+    float amax_val = 0.0f;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed; i++) {
+      amax_val = fmaxf(amax_val,
+                 fabsf(__bfloat162float(x_val[i].x)));
+      amax_val = fmaxf(amax_val,
+                 fabsf(__bfloat162float(x_val[i].y)));
+
+    }
+
+    float block_amax_val = vllm::blockReduceMax(amax_val);
+    if (tidx == 0) {
+      s_amax = block_amax_val;
+      scale[bidx] = __float2bfloat16_rn(block_amax_val / 127.0f);
+    }
+  } else {
+    if (tidx == 0) {
+      s_amax = __bfloat162float(scale[bidx]);
+    }
+  }
+
+  __syncthreads();
+  float tmp_scale = 127.0f / s_amax;
+
+  char4 o_val[n_packed / 2];
+
+#pragma unroll
+  for (uint32_t i = 0; i < n_packed; i += 2) {
+    o_val[i / 2] = make_char4(
+      float_to_int8_rn(__bfloat162float(x_val[i].x) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i].y) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i + 1].x) * tmp_scale),
+      float_to_int8_rn(__bfloat162float(x_val[i + 1].y) * tmp_scale)
+    );
+  }
+
+  if constexpr (sum_type == SumType::kPostQuant) {
+    int32_t local_sum = 0;
+
+#pragma unroll
+    for (uint32_t i = 0; i < n_packed / 2; i++) {
+      local_sum += static_cast<int32_t>(o_val[i].x);
+      local_sum += static_cast<int32_t>(o_val[i].y);
+      local_sum += static_cast<int32_t>(o_val[i].z);
+      local_sum += static_cast<int32_t>(o_val[i].w);
+    }
+
+    int32_t sum = vllm::blockReduceSum(local_sum);
+    if (tidx == 0) {
+      sum_output[bidx] = __float2bfloat16_rn(__int2float_rn(sum) / tmp_scale);
+    }
+  }
+
+  using OutputType = typename std::conditional<n_packed == 2, uint32_t, uint64_t>::type;
+  *reinterpret_cast<OutputType*>(&output[bidx * hidden_size + j]) = *reinterpret_cast<OutputType*>(&o_val);
+}
+
 
 template<typename DTypeLoad=float2, SumType sum_type=SumType::kNone, bool dynamic=true>
 __global__ void QuantKernel(const half *__restrict__ input,
@@ -381,7 +476,7 @@ __global__ void LayernormT2iQuantFuse(const half *__restrict__ input, const half
 
 template<bool has_residual=false, bool quant=false, SumType sum_type=SumType::kNone>
 __global__ void GateResidualQuantFuse(const half *__restrict__ input, const half *__restrict__ gate_msa, const half *__restrict__ residual, int8_t *__restrict__ output_quant, half *__restrict__ output, half *__restrict__ sum_output,
-    const int gate_stride, const int batch_num_rows, const int hidden_dim, half *__restrict__ scale)
+    const int gate_stride, const int batch_num_rows, const int hidden_dim, half *__restrict__ scale, half *__restrict__ intermediate_result)
 {
   half2 x_val[2];
   half2 w_val[2];
@@ -397,6 +492,8 @@ __global__ void GateResidualQuantFuse(const half *__restrict__ input, const half
 
   x_val[0] = __hmul2(x_val[0], w_val[0]);
   x_val[1] = __hmul2(x_val[1], w_val[1]);
+
+  *(float2*)(&intermediate_result[bidx * hidden_dim + j]) = *(float2*)(&x_val[0]);
 
   // residual
   if constexpr (has_residual)
@@ -490,6 +587,8 @@ void layernorm_nobias(torch::Tensor &output,    // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(weight);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -528,6 +627,9 @@ torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -582,6 +684,68 @@ torch::Tensor quant_sum(torch::Tensor &input,  // [..., hidden_size]
   return output;
 }
 
+torch::Tensor quant_sum_bf16(torch::Tensor &input,  // [..., hidden_size]
+                        torch::Tensor &sum_output, // [tokens]
+                        torch::Tensor &scaling)
+{
+  CHECK_CUDA(input);
+  CHECK_CUDA(sum_output);
+  CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
+
+  CHECK_CONTIGUOUS(input);
+  CHECK_CONTIGUOUS(sum_output);
+  CHECK_CONTIGUOUS(scaling);
+
+  CHECK_DTYPE(input, torch::kBFloat16);
+  CHECK_DTYPE(sum_output, torch::kBFloat16);
+  CHECK_DTYPE(scaling, torch::kBFloat16);
+
+  int hidden_size = input.size(-1);
+  int num_tokens = input.numel() / hidden_size;
+
+  assert(hidden_size <= 8192);
+
+  if (hidden_size > 4096) {
+    assert(hidden_size % 256 == 0);
+  } else {
+    assert(hidden_size % 128 == 0);
+  }
+
+  CHECK_SHAPE(sum_output, num_tokens);
+  CHECK_SHAPE(scaling, num_tokens);
+
+  at::Tensor output = at::empty_like(input, torch::kInt8);
+
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+  if (hidden_size <= 4096) {
+    dim3 grid(num_tokens);
+    dim3 block(hidden_size / 4);
+
+    QuantKernelBF16<float2, SumType::kPostQuant><<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input.data_ptr<at::BFloat16>()),
+      output.data_ptr<int8_t>(),
+      reinterpret_cast<__nv_bfloat16*>(sum_output.data_ptr<at::BFloat16>()),
+      reinterpret_cast<__nv_bfloat16*>(scaling.data_ptr<at::BFloat16>()),
+      num_tokens, hidden_size);
+  }
+  else {
+    dim3 grid(num_tokens);
+    dim3 block(hidden_size / 8);
+
+    QuantKernelBF16<float4, SumType::kPostQuant><<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input.data_ptr<at::BFloat16>()),
+      output.data_ptr<int8_t>(),
+      reinterpret_cast<__nv_bfloat16*>(sum_output.data_ptr<at::BFloat16>()),
+      reinterpret_cast<__nv_bfloat16*>(scaling.data_ptr<at::BFloat16>()),
+      num_tokens, hidden_size);
+  }
+
+  return output;
+}
 
 torch::Tensor quant_sum_static(torch::Tensor &input,  // [..., hidden_size]
               torch::Tensor &sum_output, // [tokens]
@@ -590,6 +754,8 @@ torch::Tensor quant_sum_static(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -651,6 +817,8 @@ torch::Tensor gelu_quant_sum(torch::Tensor &input,  // [..., hidden_size]
   CHECK_CUDA(input);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(sum_output);
@@ -715,6 +883,8 @@ void layernorm_nobias_quant_nosum_fuse(torch::Tensor &output,    // [..., hidden
   CHECK_CUDA(weight);
   CHECK_CUDA(scaling);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -759,6 +929,8 @@ void layernorm_nobias_quant_sum_fuse(torch::Tensor &output,    // [batch_size * 
   CHECK_CUDA(weight);
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
@@ -808,6 +980,8 @@ void layernorm_nobias_t2i_fuse(torch::Tensor &output,    // [batch_size * tokens
   CHECK_CUDA(weight);
   CHECK_CUDA(shift_msa);
   CHECK_CUDA(scale_msa);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
@@ -867,6 +1041,8 @@ void layernorm_nobias_t2i_quant_sum_fuse(torch::Tensor &output,    // [batch_siz
   CHECK_CUDA(sum_output);
   CHECK_CUDA(scaling);
 
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
+
   CHECK_CONTIGUOUS(output);
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
@@ -914,7 +1090,7 @@ void layernorm_nobias_t2i_quant_sum_fuse(torch::Tensor &output,    // [batch_siz
     num_tokens, hidden_size, reinterpret_cast<half*>(scaling.data_ptr<at::Half>()));
 }
 
-torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens, hidden_size]
+std::tuple<at::Tensor, at::Tensor> gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens, hidden_size]
               torch::Tensor &gate_msa, // [batch_size, hidden_size]
               torch::Tensor &residual // [batch_size * tokens, hidden_size]
               ) {
@@ -922,6 +1098,8 @@ torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens,
   CHECK_CUDA(input);
   CHECK_CUDA(gate_msa);
   CHECK_CUDA(residual);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
   
   CHECK_CONTIGUOUS(input);
   CHECK_LASTDIM_CONTIGUOUS(gate_msa);
@@ -941,6 +1119,7 @@ torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens,
   CHECK_SHAPE(residual, batch_size * num_tokens, hidden_size);
 
   torch::Tensor output = at::empty_like(input, torch::kFloat16);
+  torch::Tensor intermediate_result = at::empty_like(input, torch::kFloat16);
 
   assert(hidden_size % 128 == 0);
   dim3 grid(num_tokens * batch_size);
@@ -955,7 +1134,8 @@ torch::Tensor gate_residual_fuse(torch::Tensor &input,  // [batch_size * tokens,
     nullptr,
     reinterpret_cast<half*>(output.data_ptr<at::Half>()),
     nullptr,
-    gate_stride, num_tokens, hidden_size, nullptr);
+    gate_stride, num_tokens, hidden_size, nullptr,
+    reinterpret_cast<half*>(intermediate_result.data_ptr<at::Half>()));
 
-  return output;
+  return std::make_tuple(output, intermediate_result);
 }

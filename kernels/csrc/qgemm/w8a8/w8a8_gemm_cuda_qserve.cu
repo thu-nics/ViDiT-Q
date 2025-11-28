@@ -8,6 +8,7 @@
 
 #include "../../utils.cuh"
 #include <cuda_fp16.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 
@@ -538,6 +539,8 @@ torch::Tensor w8a8_of16_nobias_weight_sym_qserve(torch::Tensor input,
   CHECK_CUDA(weight);
   CHECK_CUDA(scale_weight);
   CHECK_CUDA(scale_input);
+
+  c10::cuda::OptionalCUDAGuard guard(input.device().index());  // checkout device to input-tensor device
 
   CHECK_CONTIGUOUS(input);
   CHECK_CONTIGUOUS(weight);
